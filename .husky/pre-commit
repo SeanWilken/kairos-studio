@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+if command -v bun >/dev/null 2>&1; then
+  bunx --bun vite build
+  bun run check:changelog
+elif command -v npm >/dev/null 2>&1; then
+  npm run check:frontend
+  npm run check:changelog
+else
+  echo "Skipping pre-commit checks: neither bun nor npm is available in PATH."
+fi
