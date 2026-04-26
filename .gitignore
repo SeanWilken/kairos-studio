@@ -12,3 +12,6 @@ dist
 *.njsproj
 *.sln
 *.sw?
+
+# Internal planning docs
+internal/

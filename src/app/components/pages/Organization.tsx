@@ -1,256 +1,191 @@
-import { useState } from "react";
-
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { Building2, ChevronDown, ChevronRight, Clock, Search, UserPlus, Users } from "lucide-react";
 import {
-  Building2,
-  Users,
-  UserPlus,
-  ChevronRight,
-  ChevronDown,
-  Shield,
-  Clock,
-  Search,
-  MoreVertical,
-  Edit,
-  Trash2,
-  Key,
-} from "lucide-react";
-
-import {
-  Button,
-  Input,
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
   TableRow,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@kairosstack/ui";
+import { createCoreApiClient, studioApi, type StudioOrganization, type StudioUser } from "../../../lib/api";
+import { getAccessToken } from "../../../lib/auth-session";
+import { readWorkspaceTeams, type TeamRecord } from "../../../lib/workspace-scope";
 
-interface OrgNode {
+type HierarchyNode = {
   id: string;
   name: string;
-  type: "tenant" | "org" | "division";
-  children?: OrgNode[];
-  userCount?: number;
-}
-
-const orgHierarchy: OrgNode = {
-  id: "tenant-1",
-  name: "Acme Corporation",
-  type: "tenant",
-  children: [
-    {
-      id: "org-1",
-      name: "Engineering",
-      type: "org",
-      userCount: 45,
-      children: [
-        { id: "div-1", name: "Backend Team", type: "division", userCount: 15 },
-        { id: "div-2", name: "Frontend Team", type: "division", userCount: 12 },
-        { id: "div-3", name: "DevOps Team", type: "division", userCount: 8 },
-      ],
-    },
-    {
-      id: "org-2",
-      name: "Product",
-      type: "org",
-      userCount: 23,
-      children: [
-        { id: "div-4", name: "Product Management", type: "division", userCount: 10 },
-        { id: "div-5", name: "Design", type: "division", userCount: 13 },
-      ],
-    },
-    {
-      id: "org-3",
-      name: "Operations",
-      type: "org",
-      userCount: 18,
-      children: [
-        { id: "div-6", name: "Support", type: "division", userCount: 12 },
-        { id: "div-7", name: "Sales", type: "division", userCount: 6 },
-      ],
-    },
-  ],
+  type: "tenant" | "organization" | "team";
+  userCount: number;
+  children?: HierarchyNode[];
 };
 
-const users = [
-  {
-    id: 1,
-    name: "Sarah Chen",
-    email: "sarah.chen@acme.com",
-    role: "Global Admin",
-    scope: "Tenant",
-    division: "All Divisions",
-    lastActive: "2026-04-07 14:30",
-    status: "active",
-  },
-  {
-    id: 2,
-    name: "Michael Rodriguez",
-    email: "michael.r@acme.com",
-    role: "Division Admin",
-    scope: "Division",
-    division: "Backend Team",
-    lastActive: "2026-04-07 13:15",
-    status: "active",
-  },
-  {
-    id: 3,
-    name: "Emily Watson",
-    email: "emily.watson@acme.com",
-    role: "Member",
-    scope: "Division",
-    division: "Frontend Team",
-    lastActive: "2026-04-07 11:45",
-    status: "active",
-  },
-  {
-    id: 4,
-    name: "James Kim",
-    email: "james.kim@acme.com",
-    role: "Org Admin",
-    scope: "Organization",
-    division: "Engineering",
-    lastActive: "2026-04-06 16:20",
-    status: "active",
-  },
-  {
-    id: 5,
-    name: "Anna Kowalski",
-    email: "anna.k@acme.com",
-    role: "Member",
-    scope: "Division",
-    division: "Design",
-    lastActive: "2026-04-05 09:30",
-    status: "invited",
-  },
-];
+function normalizeList<T>(value: unknown): T[] {
+  if (Array.isArray((value as { items?: unknown })?.items)) {
+    return ((value as { items: T[] }).items ?? []) as T[];
+  }
+  return Array.isArray(value) ? (value as T[]) : [];
+}
 
-const auditLog = [
-  {
-    id: 1,
-    timestamp: "2026-04-07 14:15",
-    actor: "Sarah Chen",
-    action: "Added user",
-    target: "Anna Kowalski",
-    details: "Role: Member, Division: Design",
-  },
-  {
-    id: 2,
-    timestamp: "2026-04-07 10:30",
-    actor: "James Kim",
-    action: "Updated role",
-    target: "Michael Rodriguez",
-    details: "Changed from Member to Division Admin",
-  },
-  {
-    id: 3,
-    timestamp: "2026-04-06 15:45",
-    actor: "Sarah Chen",
-    action: "Created division",
-    target: "DevOps Team",
-    details: "Under Engineering organization",
-  },
-  {
-    id: 4,
-    timestamp: "2026-04-06 12:00",
-    actor: "Sarah Chen",
-    action: "Revoked access",
-    target: "John Smith",
-    details: "Removed from Backend Team",
-  },
-];
+function buildHierarchy(
+  tenantName: string,
+  organizations: StudioOrganization[],
+  users: StudioUser[],
+  teams: TeamRecord[],
+): HierarchyNode {
+  const usersByOrg = users.reduce<Record<string, number>>((acc, user) => {
+    if (!user.org_id) return acc;
+    acc[user.org_id] = (acc[user.org_id] ?? 0) + 1;
+    return acc;
+  }, {});
 
-function OrgTreeNode({ node, level = 0 }: { node: OrgNode; level?: number }) {
-  const [expanded, setExpanded] = useState(level === 0);
-
-  const getTypeIcon = (type: string) => {
-    switch (type) {
-      case "tenant":
-        return <Building2 className="h-4 w-4 text-purple-600" />;
-      case "org":
-        return <Building2 className="h-4 w-4 text-blue-600" />;
-      case "division":
-        return <Users className="h-4 w-4 text-green-600" />;
-      default:
-        return null;
-    }
+  return {
+    id: "tenant-root",
+    name: tenantName,
+    type: "tenant",
+    userCount: users.length,
+    children: organizations.map((organization) => ({
+      id: organization.id,
+      name: organization.name,
+      type: "organization",
+      userCount: usersByOrg[organization.id] ?? 0,
+      children: teams
+        .filter((team) => team.orgId === organization.id)
+        .map((team) => ({
+          id: team.id,
+          name: team.name,
+          type: "team",
+          userCount: 0,
+        })),
+    })),
   };
+}
+
+function hierarchyIcon(type: HierarchyNode["type"]) {
+  if (type === "tenant") return <Building2 className="h-4 w-4 text-indigo-600" />;
+  if (type === "organization") return <Building2 className="h-4 w-4 text-blue-600" />;
+  return <Users className="h-4 w-4 text-emerald-600" />;
+}
+
+function OrgTreeNode({ node, level = 0 }: { node: HierarchyNode; level?: number }) {
+  const [expanded, setExpanded] = useState(level === 0);
+  const hasChildren = Boolean(node.children?.length);
 
   return (
     <div>
       <div
-        className="flex items-center gap-2 px-3 py-2 rounded-md hover:bg-zinc-100 cursor-pointer"
+        className="flex cursor-pointer items-center gap-2 rounded-md px-3 py-2 hover:bg-zinc-100"
         style={{ paddingLeft: `${level * 20 + 12}px` }}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setExpanded((current) => !current)}
       >
-        {node.children && node.children.length > 0 && (
-          <button className="p-0.5">
-            {expanded ? (
-              <ChevronDown className="h-4 w-4 text-zinc-500" />
-            ) : (
-              <ChevronRight className="h-4 w-4 text-zinc-500" />
-            )}
+        {hasChildren ? (
+          <button type="button" className="p-0.5">
+            {expanded ? <ChevronDown className="h-4 w-4 text-zinc-500" /> : <ChevronRight className="h-4 w-4 text-zinc-500" />}
           </button>
+        ) : (
+          <div className="w-5" />
         )}
-        {(!node.children || node.children.length === 0) && <div className="w-5" />}
-        {getTypeIcon(node.type)}
-        <span className="text-sm font-medium text-zinc-900 flex-1">{node.name}</span>
-        {node.userCount !== undefined && (
-          <Badge variant="secondary" className="text-xs">
-            {node.userCount} users
-          </Badge>
-        )}
+        {hierarchyIcon(node.type)}
+        <span className="flex-1 text-sm font-medium text-zinc-900">{node.name}</span>
+        <Badge variant="outline" className="text-[11px]">
+          {node.userCount} users
+        </Badge>
       </div>
-      {expanded && node.children && (
+      {expanded && hasChildren ? (
         <div>
-          {node.children.map((child) => (
+          {node.children?.map((child) => (
             <OrgTreeNode key={child.id} node={child} level={level + 1} />
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 export function Organization() {
-  const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
+  const [teams, setTeams] = useState<TeamRecord[]>(() => readWorkspaceTeams());
 
-  const filteredUsers = users.filter(
-    (user) =>
-      user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
+  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const accessToken = getAccessToken();
+
+  const client = useMemo(
+    () =>
+      createCoreApiClient({
+        baseUrl: runtimeBaseUrl,
+        accessToken,
+        scope: { tenantId },
+      }),
+    [runtimeBaseUrl, accessToken, tenantId],
   );
+
+  const organizationsQuery = useQuery({
+    queryKey: ["organization-page", "organizations", tenantId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => normalizeList<StudioOrganization>(await studioApi.listOrganizations(client)),
+  });
+
+  const usersQuery = useQuery({
+    queryKey: ["organization-page", "users", tenantId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => normalizeList<StudioUser>(await studioApi.listUsers(client)),
+  });
+
+  const organizations = organizationsQuery.data ?? [];
+  const users = usersQuery.data ?? [];
+  const orgNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    organizations.forEach((organization) => map.set(organization.id, organization.name));
+    return map;
+  }, [organizations]);
+
+  const filteredUsers = users.filter((user) => {
+    const term = searchTerm.toLowerCase();
+    const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim().toLowerCase();
+    return fullName.includes(term) || user.email.toLowerCase().includes(term);
+  });
+
+  const hierarchy = useMemo(
+    () => buildHierarchy(tenantId, organizations, users, teams),
+    [tenantId, organizations, users, teams],
+  );
+
+
+  if (!accessToken) {
+    return (
+      <div className="mx-auto w-full max-w-7xl p-8">
+        <Alert className="border-amber-200 bg-amber-50">
+          <AlertTitle>Authentication required</AlertTitle>
+          <AlertDescription>Sign in first to manage organizations and hierarchy.</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-zinc-900">Organization & Access</h1>
-        <p className="text-zinc-600 mt-1">
-          Manage organizational structure, users, and permissions
-        </p>
+        <p className="mt-1 text-zinc-600">Live data from Studio API for organizations and users.</p>
       </div>
 
       <Tabs defaultValue="users" className="space-y-6">
@@ -260,296 +195,115 @@ export function Organization() {
           <TabsTrigger value="audit">Audit Log</TabsTrigger>
         </TabsList>
 
-        {/* Users & Roles Tab */}
         <TabsContent value="users" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+          <div className="flex items-center justify-between gap-4">
+            <div className="relative max-w-md flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
               <Input
                 placeholder="Search users by name or email..."
                 className="pl-9"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(event) => setSearchTerm(event.target.value)}
               />
             </div>
-            <Button onClick={() => setInviteDialogOpen(true)}>
-              <UserPlus className="h-4 w-4 mr-2" />
+            <Button onClick={() => navigate("/create/user")}> 
+              <UserPlus className="mr-2 h-4 w-4" />
               Invite User
             </Button>
           </div>
 
-          <div className="border rounded-lg bg-white">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>User</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Division/Org</TableHead>
-                  <TableHead>Last Active</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredUsers.map((user) => (
-                  <TableRow key={user.id}>
-                    <TableCell>
-                      <div>
-                        <div className="font-medium text-zinc-900">{user.name}</div>
-                        <div className="text-sm text-zinc-500">{user.email}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          user.role === "Global Admin"
-                            ? "default"
-                            : user.role === "Division Admin" || user.role === "Org Admin"
-                            ? "secondary"
-                            : "outline"
-                        }
-                      >
-                        {user.role}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{user.scope}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{user.division}</span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5 text-sm text-zinc-600">
-                        <Clock className="h-3.5 w-3.5" />
-                        {user.lastActive}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={user.status === "active" ? "default" : "secondary"}
-                        className={
-                          user.status === "active"
-                            ? "bg-green-100 text-green-800"
-                            : "bg-amber-100 text-amber-800"
-                        }
-                      >
-                        {user.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Role
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Key className="h-4 w-4 mr-2" />
-                            Manage Permissions
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-red-600">
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Remove User
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Directory ({filteredUsers.length})</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>User</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Scope</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Created</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-
-          {/* Scope Matrix */}
-          <div className="border rounded-lg bg-white p-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Shield className="h-5 w-5 text-zinc-700" />
-              <h3 className="text-lg font-semibold text-zinc-900">Permission Scope Matrix</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-3 px-4 font-semibold text-zinc-900">Capability</th>
-                    <th className="text-center py-3 px-4 font-semibold text-zinc-900">Global Admin</th>
-                    <th className="text-center py-3 px-4 font-semibold text-zinc-900">Org Admin</th>
-                    <th className="text-center py-3 px-4 font-semibold text-zinc-900">Division Admin</th>
-                    <th className="text-center py-3 px-4 font-semibold text-zinc-900">Member</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b">
-                    <td className="py-3 px-4 text-zinc-700">Manage workspace settings</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-3 px-4 text-zinc-700">Create/edit personas</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-3 px-4 text-zinc-700">Deploy workflows</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-3 px-4 text-zinc-700">Manage users in scope</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                  </tr>
-                  <tr className="border-b">
-                    <td className="py-3 px-4 text-zinc-700">Upload knowledge documents</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                  </tr>
-                  <tr>
-                    <td className="py-3 px-4 text-zinc-700">View audit logs</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-green-600 font-medium">✓</td>
-                    <td className="py-3 px-4 text-center text-amber-600 font-medium">Partial</td>
-                    <td className="py-3 px-4 text-center text-zinc-300">—</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {filteredUsers.map((user) => {
+                    const fullName = `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || "Unknown";
+                    const scope = user.is_global_admin ? "Tenant" : orgNameById.get(user.org_id ?? "") ?? "Unassigned";
+                    return (
+                      <TableRow key={user.id}>
+                        <TableCell>
+                          <div>
+                            <p className="font-medium text-zinc-900">{fullName}</p>
+                            <p className="text-xs text-zinc-500">{user.email}</p>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{user.role ?? "member"}</Badge>
+                        </TableCell>
+                        <TableCell>{scope}</TableCell>
+                        <TableCell>
+                          <Badge variant={user.status === "active" ? "default" : "secondary"}>{user.status ?? "unknown"}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1.5 text-xs text-zinc-600">
+                            <Clock className="h-3.5 w-3.5" />
+                            {user.created_at ? new Date(user.created_at).toLocaleString() : "-"}
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              {usersQuery.isLoading ? <p className="pt-3 text-xs text-zinc-500">Loading users...</p> : null}
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        {/* Hierarchy Tab */}
-        <TabsContent value="hierarchy">
-          <div className="border rounded-lg bg-white p-6">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h3 className="text-lg font-semibold text-zinc-900">Organization Structure</h3>
-                <p className="text-sm text-zinc-600 mt-1">
-                  Tenant → Organizations → Divisions hierarchy
-                </p>
+        <TabsContent value="hierarchy" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Organization Structure</CardTitle>
+              <p className="text-sm text-zinc-600">Tenant -&gt; Organizations -&gt; Teams hierarchy.</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-md border border-zinc-200 p-3">
+                <p className="mb-3 text-sm font-medium text-zinc-900">Create Routes</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={() => navigate("/create/organization")}>Add Organization</Button>
+                  <Button type="button" variant="outline" onClick={() => navigate("/create/team")}>Add Team</Button>
+                  <Button type="button" variant="outline" onClick={() => navigate("/create/user")}>Invite User</Button>
+                </div>
               </div>
-              <Button variant="outline">
-                <Building2 className="h-4 w-4 mr-2" />
-                Add Division
-              </Button>
-            </div>
-            <OrgTreeNode node={orgHierarchy} />
-          </div>
+
+              <div className="rounded-md border border-zinc-200 p-2">
+                <OrgTreeNode node={hierarchy} />
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        {/* Audit Log Tab */}
         <TabsContent value="audit">
-          <div className="border rounded-lg bg-white">
-            <div className="p-6 border-b">
-              <h3 className="text-lg font-semibold text-zinc-900">Permission Change Audit Trail</h3>
-              <p className="text-sm text-zinc-600 mt-1">
-                Complete history of all permission and access modifications
-              </p>
-            </div>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Timestamp</TableHead>
-                  <TableHead>Actor</TableHead>
-                  <TableHead>Action</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {auditLog.map((entry) => (
-                  <TableRow key={entry.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-1.5 text-sm text-zinc-600">
-                        <Clock className="h-3.5 w-3.5" />
-                        {entry.timestamp}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-medium text-zinc-900">{entry.actor}</span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{entry.action}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{entry.target}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-600">{entry.details}</span>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Audit Log</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-zinc-600">
+              Audit events are still pending live wiring in this view.
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
-      {/* Invite User Dialog */}
-      <Dialog open={inviteDialogOpen} onOpenChange={setInviteDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Invite User</DialogTitle>
-            <DialogDescription>
-              Add a new user to your organization and assign their role and scope.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email Address</Label>
-              <Input id="email" placeholder="user@acme.com" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="role">Role</Label>
-              <Select>
-                <SelectTrigger id="role">
-                  <SelectValue placeholder="Select role" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="global-admin">Global Admin</SelectItem>
-                  <SelectItem value="org-admin">Org Admin</SelectItem>
-                  <SelectItem value="division-admin">Division Admin</SelectItem>
-                  <SelectItem value="member">Member</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="division">Division/Organization</Label>
-              <Select>
-                <SelectTrigger id="division">
-                  <SelectValue placeholder="Select division" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="engineering">Engineering</SelectItem>
-                  <SelectItem value="backend">Backend Team</SelectItem>
-                  <SelectItem value="frontend">Frontend Team</SelectItem>
-                  <SelectItem value="product">Product</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setInviteDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => setInviteDialogOpen(false)}>Send Invitation</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {organizationsQuery.isError || usersQuery.isError ? (
+        <Alert className="mt-6 border-red-200 bg-red-50">
+          <AlertTitle>Data load failed</AlertTitle>
+          <AlertDescription>Unable to load organizations or users from Studio API for this tenant.</AlertDescription>
+        </Alert>
+      ) : null}
+
     </div>
   );
 }

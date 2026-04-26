@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router";
 import {
   Users,
   Plus,
@@ -107,6 +108,7 @@ const testResults = [
 ];
 
 export function Personas() {
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [testDialogOpen, setTestDialogOpen] = useState(false);
@@ -147,7 +149,8 @@ export function Personas() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <Button onClick={() => setCreateDialogOpen(true)}>
+            {/* setCreateDialogOpen(true) */}
+            <Button onClick={() => navigate("/create/persona")}>
               <Plus className="h-4 w-4 mr-2" />
               Create Persona
             </Button>

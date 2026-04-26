@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import {
   FileText,
   Search,
@@ -35,6 +36,18 @@ import {
   TableHeader,
   TableRow,
 } from "@kairosstack/ui";
+import {
+  clearCreateQueueHistory,
+  getCreateQueueState,
+  processCreateQueue,
+  retryCreateQueueJob,
+  setCreateQueuePaused,
+  skipCreateQueueJob,
+  subscribeCreateQueue,
+  type CreateQueueJob,
+} from "../../../lib/create-request-queue";
+import { submitAgentPersonaRecord, submitOrganizationCreation, submitTeamCreation, submitUserCreation } from "../wizard/registration/steps/TestForm";
+import { getAccessToken } from "../../../lib/auth-session";
 
 const auditEvents = [
   {
@@ -167,9 +180,44 @@ const categoryIcons = {
 };
 
 export function Audit() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [queueState, setQueueState] = useState(() => getCreateQueueState());
+
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
+  const orgId = env.VITE_KAIROS_ORG_ID ?? "8a56c7f2-5506-46a3-ae3a-f8dfa36548e2";
+  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+
+  const tabFromQuery = searchParams.get("tab");
+  const activeTab = tabFromQuery === "summary" || tabFromQuery === "queue" ? tabFromQuery : "events";
+
+  useEffect(() => subscribeCreateQueue(setQueueState), []);
+
+  const executeQueuedJob = async (job: CreateQueueJob) => {
+    const options = {
+      ...(job.options as Record<string, unknown>),
+      tenantId,
+      orgId,
+      runtimeBaseUrl,
+      accessToken: getAccessToken(),
+    };
+
+    return job.variant === "organization_create"
+      ? submitOrganizationCreation(job.values, options)
+      : job.variant === "user_create"
+        ? submitUserCreation(job.values, options)
+        : job.variant === "team_create"
+          ? submitTeamCreation(job.values, options)
+        : submitAgentPersonaRecord(job.values, options);
+  };
+
+  const drainQueue = async () => {
+    await processCreateQueue(async (job) => executeQueuedJob(job));
+  };
 
   const filteredEvents = auditEvents.filter((event) => {
     const matchesSearch =
@@ -193,10 +241,19 @@ export function Audit() {
         <p className="text-zinc-600 mt-1">Track system activity, permission changes, and compliance</p>
       </div>
 
-      <Tabs defaultValue="events" className="space-y-6">
+      <Tabs
+        value={activeTab}
+        onValueChange={(next) => {
+          const params = new URLSearchParams(searchParams);
+          params.set("tab", next);
+          setSearchParams(params);
+        }}
+        className="space-y-6"
+      >
         <TabsList>
           <TabsTrigger value="events">Audit Log</TabsTrigger>
           <TabsTrigger value="summary">Activity Summary</TabsTrigger>
+          <TabsTrigger value="queue">Offline Queue</TabsTrigger>
         </TabsList>
 
         <TabsContent value="events" className="space-y-4">
@@ -431,6 +488,84 @@ export function Audit() {
                 </div>
               </div>
             </div>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="queue" className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">Paused: {queueState.paused ? "yes" : "no"}</Badge>
+            <Badge variant="outline">Queued: {queueState.jobs.filter((job) => job.status === "queued").length}</Badge>
+            <Badge variant="outline">Failed: {queueState.jobs.filter((job) => job.status === "failed").length}</Badge>
+            <Badge variant="outline">Done: {queueState.jobs.filter((job) => job.status === "done").length}</Badge>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setCreateQueuePaused(false);
+                void drainQueue();
+              }}
+            >
+              Resume / Sync
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setCreateQueuePaused(true)}>
+              Pause
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => clearCreateQueueHistory()}>
+              Clear Completed
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => navigate("/create/user")}>
+              Open Create
+            </Button>
+          </div>
+
+          <div className="space-y-2 rounded-lg border bg-white p-4">
+            {queueState.jobs.length === 0 ? (
+              <p className="text-sm text-zinc-500">No queued requests.</p>
+            ) : (
+              queueState.jobs.map((job) => (
+                <div key={job.id} className="rounded border border-zinc-200 p-3 text-xs">
+                  <p className="font-semibold text-zinc-800">{job.variant}</p>
+                  <p className="text-zinc-600">status: {job.status} | attempts: {job.attempts}</p>
+                  {job.lastError ? <p className="mt-1 text-red-700">{job.lastError}</p> : null}
+                  {(job.status === "failed" || job.status === "skipped") ? (
+                    <div className="mt-2 flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          retryCreateQueueJob(job.id);
+                          setCreateQueuePaused(false);
+                          void drainQueue();
+                        }}
+                      >
+                        Retry
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          skipCreateQueueJob(job.id);
+                          setCreateQueuePaused(false);
+                          void drainQueue();
+                        }}
+                      >
+                        Skip + Continue
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="rounded-lg border bg-white p-4">
+            <h3 className="mb-2 text-sm font-semibold text-zinc-900">Queue Audit Trail</h3>
+            <pre className="max-h-64 overflow-auto rounded bg-zinc-50 p-2 text-[11px] text-zinc-700">
+              {JSON.stringify(queueState.audit.slice(0, 50), null, 2)}
+            </pre>
           </div>
         </TabsContent>
       </Tabs>

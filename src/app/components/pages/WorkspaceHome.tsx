@@ -1,248 +1,484 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
   CheckCircle2,
   Circle,
-  AlertCircle,
+  Clock,
+  Upload,
   UserPlus,
   Users,
-  Wrench,
   Workflow,
-  Upload,
-  ArrowRight,
-  Clock,
-  AlertTriangle
+  Wrench,
+  Radio,
 } from "lucide-react";
-import { 
-  Button, 
-  Progress,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@kairosstack/ui";
+import { Button, Progress } from "@kairosstack/ui";
+import { bootstrapApi, createCoreApiClient, healthApi, studioApi, systemApi } from "../../../lib/api";
+import { getAccessToken } from "../../../lib/auth-session";
+import { getCreateQueueState, subscribeCreateQueue } from "../../../lib/create-request-queue";
+import { buildWorkspaceNotifications, type WorkspaceHealthLevel } from "../../../lib/workspace-notifications";
+import { getWorkspaceScope, subscribeWorkspaceScope, type WorkspaceScope } from "../../../lib/workspace-scope";
 
-const setupSteps = [
-  { id: 1, label: "Core connection established", completed: true, timestamp: "2026-04-07 09:15" },
-  { id: 2, label: "Organization structure configured", completed: true, timestamp: "2026-04-07 09:22" },
-  { id: 3, label: "Initial persona created", completed: true, timestamp: "2026-04-07 10:08" },
-  { id: 4, label: "Tool registry initialized", completed: false, timestamp: null },
-  { id: 5, label: "First workflow deployed", completed: false, timestamp: null },
-];
+type HealthItem = {
+  key: string;
+  label: string;
+  level: WorkspaceHealthLevel;
+  message: string;
+};
 
-const alerts = [
-  {
-    id: 1,
-    type: "warning",
-    title: "Email tool credentials expiring",
-    message: "SMTP credentials for Production division expire in 7 days",
-    action: "Update Credentials",
-  },
-  {
-    id: 2,
-    type: "info",
-    title: "Persona approval pending",
-    message: "2 personas awaiting review before production deployment",
-    action: "Review Personas",
-  },
-  {
-    id: 3,
-    type: "warning",
-    title: "Knowledge sync delayed",
-    message: "Document vectorization queue has 43 items pending",
-    action: "View Queue",
-  },
-];
+type SetupStep = {
+  id: string;
+  label: string;
+  completed: boolean;
+  timestamp?: string;
+};
+
+const CORE_FRONTEND_URL = (import.meta.env.VITE_KAIROS_CORE_FRONTEND_URL as string | undefined) ?? "";
+const COUNCIL_FRONTEND_URL = (import.meta.env.VITE_KAIROS_COUNCIL_FRONTEND_URL as string | undefined) ?? "";
+const EXPLICIT_WS_URL = (import.meta.env.VITE_KAIROS_CORE_WS_URL as string | undefined) ?? "";
+
+function normalizeList<T>(value: unknown): T[] {
+  if (Array.isArray((value as { items?: unknown })?.items)) {
+    return ((value as { items: T[] }).items ?? []) as T[];
+  }
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function healthClassName(level: WorkspaceHealthLevel): string {
+  if (level === "healthy") return "text-green-600";
+  if (level === "warning") return "text-amber-600";
+  if (level === "critical") return "text-red-600";
+  return "text-zinc-500";
+}
+
+function dotClassName(level: WorkspaceHealthLevel): string {
+  if (level === "healthy") return "bg-green-500";
+  if (level === "warning") return "bg-amber-500";
+  if (level === "critical") return "bg-red-500";
+  return "bg-zinc-400";
+}
+
+function checkLevel(checks: Array<{ check_id?: string; status?: string }>, checkId: string): WorkspaceHealthLevel {
+  const check = checks.find((item) => item.check_id === checkId);
+  if (!check) return "unknown";
+  if (check.status === "pass") return "healthy";
+  if (check.status === "warn" || check.status === "pending") return "warning";
+  if (check.status === "fail") return "critical";
+  return "unknown";
+}
+
+function normalizeProbeUrl(input: string): string {
+  const value = input.trim();
+  if (!value) return "";
+  if (value.startsWith("http://") || value.startsWith("https://")) return value;
+  return `http://${value}`;
+}
+
+async function probeFrontend(url: string): Promise<WorkspaceHealthLevel> {
+  const normalizedUrl = normalizeProbeUrl(url);
+  if (!normalizedUrl) return "unknown";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    await fetch(normalizedUrl, { mode: "no-cors", signal: controller.signal });
+    return "healthy";
+  } catch {
+    return "unknown";
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function probeWebSocket(baseUrl: string, accessToken: string): Promise<WorkspaceHealthLevel> {
+  if (!accessToken) return "unknown";
+  const wsBase = EXPLICIT_WS_URL || `${baseUrl.replace(/^http/i, "ws").replace(/\/$/, "")}/v1/realtime/ws`;
+  const wsUrl = `${wsBase}?token=${encodeURIComponent(accessToken)}`;
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = new WebSocket(wsUrl);
+    const done = (level: WorkspaceHealthLevel) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {
+        // no-op
+      }
+      resolve(level);
+    };
+
+    const timer = setTimeout(() => done("warning"), 3000);
+    socket.onopen = () => done("healthy");
+    socket.onerror = () => done("critical");
+  });
+}
 
 const quickActions = [
-  {
-    icon: UserPlus,
-    label: "Invite User",
-    description: "Add team members to your organization",
-    iconBg: "bg-blue-50 group-hover:bg-blue-100",
-    iconColor: "text-blue-600"
-  },
-  {
-    icon: Users,
-    label: "Create Persona",
-    description: "Define a new agent persona with capabilities",
-    iconBg: "bg-purple-50 group-hover:bg-purple-100",
-    iconColor: "text-purple-600"
-  },
-  {
-    icon: Wrench,
-    label: "Add Tool",
-    description: "Register a new tool integration",
-    iconBg: "bg-orange-50 group-hover:bg-orange-100",
-    iconColor: "text-orange-600"
-  },
-  {
-    icon: Workflow,
-    label: "New Workflow",
-    description: "Build a multi-agent workflow",
-    iconBg: "bg-green-50 group-hover:bg-green-100",
-    iconColor: "text-green-600"
-  },
-  {
-    icon: Upload,
-    label: "Upload Docs",
-    description: "Add documents to knowledge base",
-    iconBg: "bg-teal-50 group-hover:bg-teal-100",
-    iconColor: "text-teal-600"
-  },
+  { icon: UserPlus, label: "Invite User", description: "Add team members to your organization", href: "/create/user", iconBg: "bg-blue-50", iconColor: "text-blue-600" },
+  { icon: Users, label: "Create Persona", description: "Define a new agent persona with capabilities", href: "/create/persona", iconBg: "bg-indigo-50", iconColor: "text-indigo-600" },
+  { icon: Wrench, label: "Add Tool", description: "Register a new tool integration", href: "/tools", iconBg: "bg-orange-50", iconColor: "text-orange-600" },
+  { icon: Workflow, label: "New Workflow", description: "Build a multi-agent workflow", href: "/workflows", iconBg: "bg-green-50", iconColor: "text-green-600" },
+  { icon: Upload, label: "Upload Docs", description: "Add documents to knowledge base", href: "/knowledge", iconBg: "bg-teal-50", iconColor: "text-teal-600" },
+  { icon: Radio, label: "Realtime Test", description: "Open websocket chat test lab", href: "/realtime", iconBg: "bg-rose-50", iconColor: "text-rose-600" },
 ];
 
 export function WorkspaceHome() {
-  const [activeModal, setActiveModal] = useState<string | null>(null);
-  const completedSteps = setupSteps.filter(s => s.completed).length;
-  const progressPercent = (completedSteps / setupSteps.length) * 100;
+  const navigate = useNavigate();
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
+  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const accessToken = getAccessToken();
+
+  const [queueState, setQueueState] = useState(() => getCreateQueueState());
+  const [scope, setScope] = useState<WorkspaceScope>(() => getWorkspaceScope(tenantId));
+
+  useEffect(() => subscribeCreateQueue(setQueueState), []);
+  useEffect(() => subscribeWorkspaceScope(setScope, tenantId), [tenantId]);
+
+  const scopeOrgId = scope.type === "organization" ? scope.id : scope.type === "team" ? scope.orgId : undefined;
+
+  const workspaceQuery = useQuery({
+    queryKey: ["workspace", "overview", tenantId, scope.type, scope.id, scopeOrgId, Boolean(accessToken)],
+    queryFn: async () => {
+      const publicClient = createCoreApiClient({ baseUrl: runtimeBaseUrl, scope: { tenantId } });
+      const scopedClient = createCoreApiClient({
+        baseUrl: runtimeBaseUrl,
+        accessToken,
+        scope: { tenantId, orgId: scopeOrgId },
+      });
+
+      const [health, tenantStatus, latestSession, organizationsResponse, usersResponse, coreFrontendStatus, councilFrontendStatus, webSocketStatus] = await Promise.all([
+        healthApi.getHealth(publicClient),
+        bootstrapApi.getTenantStatus(publicClient),
+        bootstrapApi.listSessions(publicClient, { latest: true }),
+        accessToken ? studioApi.listOrganizations(scopedClient) : Promise.resolve({ items: [] }),
+        accessToken ? studioApi.listUsers(scopedClient, { orgId: scopeOrgId }) : Promise.resolve({ items: [] }),
+        probeFrontend(CORE_FRONTEND_URL),
+        probeFrontend(COUNCIL_FRONTEND_URL),
+        probeWebSocket(publicClient.baseUrl, accessToken),
+      ]);
+
+      const organizations = normalizeList<{ id: string; name: string; created_at?: string }>(organizationsResponse);
+      const users = normalizeList<{ id: string; created_at?: string }>(usersResponse);
+
+      let sessionId = "";
+      if (Array.isArray(latestSession) && latestSession.length > 0) {
+        sessionId = typeof latestSession[0]?.session_id === "string" ? latestSession[0].session_id : "";
+      } else if (latestSession && typeof latestSession === "object") {
+        sessionId = typeof (latestSession as { session_id?: string }).session_id === "string"
+          ? (latestSession as { session_id?: string }).session_id ?? ""
+          : "";
+      }
+
+      let checks: Array<{ check_id?: string; status?: string }> = [];
+      if (sessionId) {
+        const runtimeStatus = await systemApi.getStatus(publicClient, sessionId);
+        checks = Array.isArray(runtimeStatus.checks) ? runtimeStatus.checks : [];
+      }
+
+      const postgresLevel = checkLevel(checks, "postgres_reachable");
+      const inferredPostgresLevel: WorkspaceHealthLevel =
+        postgresLevel === "unknown" && users.length >= 0 && organizations.length >= 0 && Boolean(accessToken)
+          ? "healthy"
+          : postgresLevel;
+
+      const healthItems: HealthItem[] = [
+        {
+          key: "core-api",
+          label: "Core API Health",
+          level: health ? "healthy" : "critical",
+          message: health ? "Healthy" : "Unavailable",
+        },
+        {
+          key: "postgres",
+          label: "PostgreSQL",
+          level: inferredPostgresLevel,
+          message:
+            inferredPostgresLevel === "healthy"
+              ? "Connected"
+              : inferredPostgresLevel === "warning"
+                ? "Check pending"
+                : inferredPostgresLevel === "critical"
+                  ? "Connection issue"
+                  : "No runtime check data",
+        },
+        {
+          key: "providers",
+          label: "Provider Connectivity",
+          level: checkLevel(checks, "provider_connectivity"),
+          message: checkLevel(checks, "provider_connectivity") === "healthy" ? "Reachable" : "Not ready",
+        },
+        {
+          key: "frontend-core",
+          label: "Core Frontend",
+          level: coreFrontendStatus,
+          message:
+            coreFrontendStatus === "healthy"
+              ? "Reachable"
+              : coreFrontendStatus === "unknown"
+                ? "Unable to verify from browser"
+                : "Unavailable",
+        },
+        {
+          key: "frontend-council",
+          label: "Council Frontend",
+          level: councilFrontendStatus,
+          message:
+            councilFrontendStatus === "healthy"
+              ? "Reachable"
+              : councilFrontendStatus === "unknown"
+                ? "Unable to verify from browser"
+                : "Unavailable",
+        },
+        {
+          key: "websocket",
+          label: "Realtime WebSocket",
+          level: webSocketStatus,
+          message:
+            webSocketStatus === "healthy"
+              ? "Connected"
+              : webSocketStatus === "warning"
+                ? "Handshake timeout"
+                : webSocketStatus === "critical"
+                  ? "Connection failed"
+                  : "Requires login token",
+        },
+      ];
+
+      const setupSteps: SetupStep[] = [
+        {
+          id: "tenant",
+          label: "Tenant initialized",
+          completed: Boolean(tenantStatus.configured),
+        },
+        {
+          id: "auth",
+          label: "Authenticated session active",
+          completed: Boolean(accessToken),
+        },
+        {
+          id: "user",
+          label: "At least one user exists",
+          completed: users.length > 0,
+          timestamp: users[0]?.created_at,
+        },
+        {
+          id: "organization",
+          label: "At least one organization exists",
+          completed: organizations.length > 0,
+          timestamp: organizations[0]?.created_at,
+        },
+        {
+          id: "realtime",
+          label: "Realtime connectivity available",
+          completed: webSocketStatus === "healthy",
+        },
+      ];
+
+      const setupIncompleteCount = setupSteps.filter((step) => !step.completed).length;
+      const notifications = buildWorkspaceNotifications({
+        healthItems,
+        queueFailedCount: queueState.jobs.filter((job) => job.status === "failed").length,
+        setupIncompleteCount,
+        organizationsCount: organizations.length,
+        usersCount: users.length,
+      });
+
+      return {
+        checkedAt: new Date().toISOString(),
+        healthItems,
+        setupSteps,
+        notifications,
+        organizationsCount: organizations.length,
+        usersCount: users.length,
+        queueFailedCount: queueState.jobs.filter((job) => job.status === "failed").length,
+      };
+    },
+    refetchInterval: 60_000,
+  });
+
+  const workspace = workspaceQuery.data;
+  const topLevelHealth: WorkspaceHealthLevel = workspace?.healthItems.some((item) => item.level === "critical")
+    ? "critical"
+    : workspace?.healthItems.some((item) => item.level === "warning")
+      ? "warning"
+      : "healthy";
+
+  const completedSteps = workspace?.setupSteps.filter((step) => step.completed).length ?? 0;
+  const totalSteps = workspace?.setupSteps.length ?? 0;
+  const progressPercent = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
+  const setupComplete = Boolean(totalSteps > 0 && completedSteps === totalSteps);
 
   return (
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-zinc-900">Workspace Overview</h1>
-        <p className="text-zinc-600 mt-1">Monitor your Studio environment and setup progress</p>
+        <p className="mt-1 text-zinc-600">Live status, setup progress, and actionable alerts.</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-        {/* Core Status Card */}
-        <div className="border rounded-lg bg-white p-6">
-          <div className="flex items-start justify-between mb-4">
+      <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div className="rounded-lg border bg-white p-6">
+          <div className="mb-4 flex items-start justify-between">
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">Core Status</h2>
               <p className="text-sm text-zinc-600">System health and connectivity</p>
             </div>
-            <div className="w-3 h-3 bg-green-500 rounded-full" />
+            <div className={`h-3 w-3 rounded-full ${dotClassName(topLevelHealth)}`} />
           </div>
 
           <div className="space-y-3">
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-sm text-zinc-700">Core Connection</span>
-              <span className="text-sm font-medium text-green-600">Online</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-sm text-zinc-700">API Gateway</span>
-              <span className="text-sm font-medium text-green-600">Healthy</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b">
-              <span className="text-sm text-zinc-700">Knowledge Index</span>
-              <span className="text-sm font-medium text-green-600">Synced</span>
-            </div>
-            <div className="flex justify-between items-center py-2">
-              <span className="text-sm text-zinc-700">Workflow Engine</span>
-              <span className="text-sm font-medium text-green-600">Running</span>
-            </div>
-          </div>
-
-          <div className="mt-4 pt-4 border-t">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-zinc-600">Last health check</span>
-              <span className="text-zinc-900 font-medium">2 minutes ago</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Setup Progress */}
-        <div className="border rounded-lg bg-white p-6">
-          <h2 className="text-lg font-semibold text-zinc-900 mb-1">Setup Progress</h2>
-          <p className="text-sm text-zinc-600 mb-4">Initial workspace configuration</p>
-
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-zinc-700">{completedSteps} of {setupSteps.length} completed</span>
-              <span className="text-sm font-medium text-zinc-900">{Math.round(progressPercent)}%</span>
-            </div>
-            <Progress value={progressPercent} className="h-2" />
-          </div>
-
-          <div className="space-y-3">
-            {setupSteps.map((step) => (
-              <div key={step.id} className="flex items-start gap-3">
-                {step.completed ? (
-                  <CheckCircle2 className="h-5 w-5 text-green-600 mt-0.5 flex-shrink-0" />
-                ) : (
-                  <Circle className="h-5 w-5 text-zinc-300 mt-0.5 flex-shrink-0" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium ${step.completed ? 'text-zinc-900' : 'text-zinc-500'}`}>
-                    {step.label}
-                  </p>
-                  {step.timestamp && (
-                    <p className="text-xs text-zinc-500 flex items-center gap-1 mt-0.5">
-                      <Clock className="h-3 w-3" />
-                      {step.timestamp}
-                    </p>
-                  )}
-                </div>
+            {workspace?.healthItems.map((item, index) => (
+              <div
+                key={item.key}
+                className={`flex items-center justify-between py-2 ${index < workspace.healthItems.length - 1 ? "border-b" : ""}`}
+              >
+                <span className="text-sm text-zinc-700">{item.label}</span>
+                <span className={`text-sm font-medium ${healthClassName(item.level)}`}>{item.message}</span>
               </div>
             ))}
+
+            {!workspace && !workspaceQuery.isError ? <div className="py-3 text-sm text-zinc-500">Loading health checks...</div> : null}
+            {workspaceQuery.isError ? <div className="py-3 text-sm text-red-600">Unable to load workspace health.</div> : null}
+          </div>
+
+          <div className="mt-4 border-t pt-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-zinc-600">Last health check</span>
+              <span className="font-medium text-zinc-900">{workspace?.checkedAt ? new Date(workspace.checkedAt).toLocaleTimeString() : "-"}</span>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Alerts Section */}
-      <div className="mb-6">
-        <h2 className="text-lg font-semibold text-zinc-900 mb-4">Needs Attention</h2>
-        <div className="space-y-3">
-          {alerts.map((alert) => (
-            <div
-              key={alert.id}
-              className={`border rounded-lg bg-white p-4 flex items-start gap-4 ${
-                alert.type === 'warning' ? 'border-l-4 border-l-amber-500' : 'border-l-4 border-l-blue-500'
-              }`}
-            >
-              {alert.type === 'warning' ? (
-                <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1 min-w-0">
-                <h3 className="text-sm font-semibold text-zinc-900">{alert.title}</h3>
-                <p className="text-sm text-zinc-600 mt-0.5">{alert.message}</p>
+        <div className="rounded-lg border bg-white p-6">
+          {setupComplete ? (
+            <>
+              <h2 className="mb-1 text-lg font-semibold text-zinc-900">Workspace Signals</h2>
+              <p className="mb-4 text-sm text-zinc-600">Setup completed. Monitoring live operational metrics.</p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-zinc-500">Organizations</p>
+                  <p className="text-xl font-semibold text-zinc-900">{workspace?.organizationsCount ?? 0}</p>
+                </div>
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-zinc-500">Users</p>
+                  <p className="text-xl font-semibold text-zinc-900">{workspace?.usersCount ?? 0}</p>
+                </div>
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-zinc-500">Failed Queue Jobs</p>
+                  <p className="text-xl font-semibold text-zinc-900">{workspace?.queueFailedCount ?? 0}</p>
+                </div>
+                <div className="rounded-md border p-3">
+                  <p className="text-xs text-zinc-500">Status</p>
+                  <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+                    <BarChart3 className="h-4 w-4" />
+                    Stable
+                  </div>
+                </div>
               </div>
-              <Button variant="outline" size="sm" className="flex-shrink-0">
-                {alert.action}
-                <ArrowRight className="h-4 w-4 ml-1" />
-              </Button>
-            </div>
-          ))}
+              <div className="mt-4">
+                <Button variant="outline" size="sm" onClick={() => navigate("/audit?tab=queue")}>
+                  Open Offline Queue
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2 className="mb-1 text-lg font-semibold text-zinc-900">Setup Progress</h2>
+              <p className="mb-4 text-sm text-zinc-600">Track real onboarding completion from API state.</p>
+
+              <div className="mb-6">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm font-medium text-zinc-700">{completedSteps} of {totalSteps} completed</span>
+                  <span className="text-sm font-medium text-zinc-900">{Math.round(progressPercent)}%</span>
+                </div>
+                <Progress value={progressPercent} className="h-2" />
+              </div>
+
+              <div className="space-y-3">
+                {workspace?.setupSteps.map((step) => (
+                  <div key={step.id} className="flex items-start gap-3">
+                    {step.completed ? (
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-green-600" />
+                    ) : (
+                      <Circle className="mt-0.5 h-5 w-5 flex-shrink-0 text-zinc-300" />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-sm font-medium ${step.completed ? "text-zinc-900" : "text-zinc-500"}`}>{step.label}</p>
+                      {step.timestamp ? (
+                        <p className="mt-0.5 flex items-center gap-1 text-xs text-zinc-500">
+                          <Clock className="h-3 w-3" />
+                          {new Date(step.timestamp).toLocaleString()}
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Quick Actions */}
+      <div className="mb-6">
+        <h2 className="mb-4 text-lg font-semibold text-zinc-900">Needs Attention</h2>
+        <div className="space-y-3">
+          {(workspace?.notifications ?? []).length === 0 ? (
+            <div className="rounded-lg border bg-white p-4 text-sm text-zinc-600">No active alerts.</div>
+          ) : (
+            workspace?.notifications.map((alert) => (
+              <div
+                key={alert.id}
+                className={`flex items-start gap-4 rounded-lg border bg-white p-4 ${
+                  alert.level === "critical"
+                    ? "border-l-4 border-l-red-500"
+                    : alert.level === "warning"
+                      ? "border-l-4 border-l-amber-500"
+                      : "border-l-4 border-l-blue-500"
+                }`}
+              >
+                {alert.level === "critical" || alert.level === "warning" ? (
+                  <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+                ) : (
+                  <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-blue-600" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-zinc-900">{alert.title}</h3>
+                  <p className="mt-0.5 text-sm text-zinc-600">{alert.detail}</p>
+                </div>
+                <Button variant="outline" size="sm" className="flex-shrink-0" onClick={() => navigate(alert.href)}>
+                  {alert.actionLabel}
+                  <ArrowRight className="ml-1 h-4 w-4" />
+                </Button>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       <div>
-        <h2 className="text-lg font-semibold text-zinc-900 mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+        <h2 className="mb-4 text-lg font-semibold text-zinc-900">Quick Actions</h2>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
           {quickActions.map((action) => (
             <button
               key={action.label}
-              onClick={() => setActiveModal(action.label)}
-              className="border rounded-lg bg-white p-5 text-left hover:border-zinc-400 hover:shadow-sm transition-all group"
+              type="button"
+              onClick={() => navigate(action.href)}
+              className="group rounded-lg border bg-white p-5 text-left transition-all hover:border-zinc-400 hover:shadow-sm"
             >
-              <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 transition-colors ${action.iconBg}`}>
+              <div className={`mb-3 flex h-10 w-10 items-center justify-center rounded-lg ${action.iconBg}`}>
                 <action.icon className={`h-5 w-5 ${action.iconColor}`} />
               </div>
-              <h3 className="text-sm font-semibold text-zinc-900 mb-1">{action.label}</h3>
-              <p className="text-xs text-zinc-600 leading-relaxed">{action.description}</p>
+              <h3 className="mb-1 text-sm font-semibold text-zinc-900">{action.label}</h3>
+              <p className="text-xs leading-relaxed text-zinc-600">{action.description}</p>
             </button>
           ))}
         </div>
       </div>
-
-      {/* Modal Skeleton */}
-      <Dialog open={!!activeModal} onOpenChange={() => setActiveModal(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{activeModal}</DialogTitle>
-            <DialogDescription>
-              This feature is ready for implementation. The modal structure is in place.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-6 text-center text-sm text-zinc-600">
-            Modal content for "{activeModal}" will be implemented based on specific requirements.
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

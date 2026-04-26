@@ -1,6 +1,12 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 import {
-  Wrench,
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import {
   Plus,
   Search,
   MoreVertical,
@@ -51,16 +57,45 @@ import {
   Switch,
 } from "@kairosstack/ui";
 
-const toolCategories = {
-  email: { icon: Mail, color: "blue" },
-  api: { icon: Globe, color: "green" },
-  database: { icon: Database, color: "purple" },
-  filesystem: { icon: FileText, color: "orange" },
-  calendar: { icon: Calendar, color: "teal" },
-  custom: { icon: Code, color: "zinc" },
+type ToolCategory = "email" | "api" | "database" | "filesystem" | "calendar" | "custom";
+type ToolStatus = "active" | "pending_approval";
+type RiskLevel = "low" | "medium" | "high";
+
+type ToolItem = {
+  id: number;
+  name: string;
+  category: ToolCategory;
+  status: ToolStatus;
+  secretsConfigured: boolean;
+  scope: string;
+  approvalRequired: boolean;
+  riskLevel: RiskLevel;
+  usageCount: number;
+  lastUsed: string | null;
 };
 
-const tools = [
+type ApprovalRequest = {
+  id: number;
+  tool: string;
+  requester: string;
+  requestDate: string;
+  reason: string;
+  riskLevel: "medium" | "high";
+};
+
+const toolCategories: Record<
+  ToolCategory,
+  { icon: typeof Mail; iconContainerClassName: string }
+> = {
+  email: { icon: Mail, iconContainerClassName: "bg-blue-50 text-blue-600" },
+  api: { icon: Globe, iconContainerClassName: "bg-green-50 text-green-600" },
+  database: { icon: Database, iconContainerClassName: "bg-purple-50 text-purple-600" },
+  filesystem: { icon: FileText, iconContainerClassName: "bg-orange-50 text-orange-600" },
+  calendar: { icon: Calendar, iconContainerClassName: "bg-teal-50 text-teal-600" },
+  custom: { icon: Code, iconContainerClassName: "bg-zinc-100 text-zinc-600" },
+};
+
+const toolsSeed: ToolItem[] = [
   {
     id: 1,
     name: "Email Service",
@@ -135,7 +170,7 @@ const tools = [
   },
 ];
 
-const approvalQueue = [
+const approvalsSeed: ApprovalRequest[] = [
   {
     id: 1,
     tool: "Payment Gateway",
@@ -154,31 +189,215 @@ const approvalQueue = [
   },
 ];
 
+async function fetchTools(): Promise<ToolItem[]> {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  return toolsSeed;
+}
+
+async function fetchApprovalQueue(): Promise<ApprovalRequest[]> {
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  return approvalsSeed;
+}
+
 export function Tools() {
   const [searchTerm, setSearchTerm] = useState("");
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [secretsDialogOpen, setSecretsDialogOpen] = useState(false);
-  const [selectedTool, setSelectedTool] = useState<typeof tools[0] | null>(null);
+  const [selectedTool, setSelectedTool] = useState<ToolItem | null>(null);
 
-  const filteredTools = tools.filter((tool) =>
-    tool.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const toolsQuery = useQuery({
+    queryKey: ["tools", "registry"],
+    queryFn: fetchTools,
+  });
+
+  const approvalQueueQuery = useQuery({
+    queryKey: ["tools", "approvalQueue"],
+    queryFn: fetchApprovalQueue,
+  });
+
+  const tools = toolsQuery.data ?? [];
+  const approvalQueue = approvalQueueQuery.data ?? [];
+
+  const filteredTools = useMemo(
+    () =>
+      tools.filter((tool) =>
+        tool.name.toLowerCase().includes(searchTerm.toLowerCase()),
+      ),
+    [tools, searchTerm],
   );
 
-  const openSecretsDialog = (tool: typeof tools[0]) => {
+  const openSecretsDialog = useCallback((tool: ToolItem) => {
     setSelectedTool(tool);
     setSecretsDialogOpen(true);
-  };
+  }, []);
 
-  const getToolIcon = (category: keyof typeof toolCategories) => {
-    const config = toolCategories[category];
-    return <config.icon className="h-5 w-5" />;
-  };
+  const columns = useMemo<ColumnDef<ToolItem>[]>(
+    () => [
+      {
+        accessorKey: "name",
+        header: "Tool",
+        cell: ({ row }) => {
+          const tool = row.original;
+          const category = toolCategories[tool.category];
+          const CategoryIcon = category.icon;
+
+          return (
+            <div className="flex items-center gap-3">
+              <div
+                className={`flex h-10 w-10 items-center justify-center rounded-lg ${category.iconContainerClassName}`}
+              >
+                <CategoryIcon className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="font-medium text-zinc-900">{tool.name}</div>
+                <div className="mt-0.5 flex items-center gap-2">
+                  <Badge
+                    variant={tool.status === "active" ? "default" : "secondary"}
+                    className={
+                      tool.status === "active"
+                        ? "bg-green-100 text-xs text-green-800"
+                        : "bg-amber-100 text-xs text-amber-800"
+                    }
+                  >
+                    {tool.status}
+                  </Badge>
+                  {tool.approvalRequired && (
+                    <Badge variant="outline" className="text-xs">
+                      <Shield className="mr-1 h-3 w-3" />
+                      Approval Req.
+                    </Badge>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: "category",
+        header: "Category",
+        cell: ({ row }) => (
+          <span className="text-sm capitalize text-zinc-700">{row.original.category}</span>
+        ),
+      },
+      {
+        accessorKey: "scope",
+        header: "Scope",
+        cell: ({ row }) => <span className="text-sm text-zinc-700">{row.original.scope}</span>,
+      },
+      {
+        accessorKey: "riskLevel",
+        header: "Risk Level",
+        cell: ({ row }) => {
+          const riskLevel = row.original.riskLevel;
+          return (
+            <Badge
+              variant="outline"
+              className={
+                riskLevel === "high"
+                  ? "border-red-300 text-red-700"
+                  : riskLevel === "medium"
+                    ? "border-amber-300 text-amber-700"
+                    : "border-green-300 text-green-700"
+              }
+            >
+              {riskLevel}
+            </Badge>
+          );
+        },
+      },
+      {
+        id: "secrets",
+        header: "Secrets",
+        cell: ({ row }) => {
+          const tool = row.original;
+
+          return (
+            <button
+              onClick={() => openSecretsDialog(tool)}
+              className="flex items-center gap-1.5 text-sm hover:underline"
+            >
+              {tool.secretsConfigured ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  <span className="text-green-700">Configured</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="h-4 w-4 text-amber-600" />
+                  <span className="text-amber-700">Pending</span>
+                </>
+              )}
+            </button>
+          );
+        },
+      },
+      {
+        accessorKey: "usageCount",
+        header: "Usage",
+        cell: ({ row }) => (
+          <span className="text-sm text-zinc-700">{row.original.usageCount} calls</span>
+        ),
+      },
+      {
+        accessorKey: "lastUsed",
+        header: "Last Used",
+        cell: ({ row }) =>
+          row.original.lastUsed ? (
+            <div className="flex items-center gap-1.5 text-sm text-zinc-600">
+              <Clock className="h-3.5 w-3.5" />
+              {row.original.lastUsed}
+            </div>
+          ) : (
+            <span className="text-sm text-zinc-400">Never</span>
+          ),
+      },
+      {
+        id: "actions",
+        header: "",
+        cell: ({ row }) => {
+          const tool = row.original;
+
+          return (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <MoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem>
+                  <Edit className="mr-2 h-4 w-4" />
+                  Edit Configuration
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => openSecretsDialog(tool)}>
+                  <Key className="mr-2 h-4 w-4" />
+                  Manage Secrets
+                </DropdownMenuItem>
+                <DropdownMenuItem className="text-red-600">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Remove Tool
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        },
+      },
+    ],
+    [openSecretsDialog],
+  );
+
+  const table = useReactTable({
+    data: filteredTools,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-zinc-900">Tools & Integrations</h1>
-        <p className="text-zinc-600 mt-1">Manage tool registry, integrations, and access controls</p>
+        <p className="mt-1 text-zinc-600">Manage tool registry, integrations, and access controls</p>
       </div>
 
       <Tabs defaultValue="registry" className="space-y-6">
@@ -196,8 +415,8 @@ export function Tools() {
 
         <TabsContent value="registry" className="space-y-4">
           <div className="flex items-center justify-between">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+            <div className="relative max-w-md flex-1">
+              <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-zinc-400" />
               <Input
                 placeholder="Search tools..."
                 className="pl-9"
@@ -206,191 +425,121 @@ export function Tools() {
               />
             </div>
             <Button onClick={() => setAddDialogOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
+              <Plus className="mr-2 h-4 w-4" />
               Add Tool
             </Button>
           </div>
 
-          <div className="border rounded-lg bg-white">
+          <div className="rounded-lg border bg-white">
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead>Tool</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Risk Level</TableHead>
-                  <TableHead>Secrets</TableHead>
-                  <TableHead>Usage</TableHead>
-                  <TableHead>Last Used</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredTools.map((tool) => (
-                  <TableRow key={tool.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-lg bg-${toolCategories[tool.category as keyof typeof toolCategories].color}-50 flex items-center justify-center`}>
-                          {getToolIcon(tool.category as keyof typeof toolCategories)}
-                        </div>
-                        <div>
-                          <div className="font-medium text-zinc-900">{tool.name}</div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <Badge
-                              variant={tool.status === "active" ? "default" : "secondary"}
-                              className={
-                                tool.status === "active"
-                                  ? "bg-green-100 text-green-800 text-xs"
-                                  : "bg-amber-100 text-amber-800 text-xs"
-                              }
-                            >
-                              {tool.status}
-                            </Badge>
-                            {tool.approvalRequired && (
-                              <Badge variant="outline" className="text-xs">
-                                <Shield className="h-3 w-3 mr-1" />
-                                Approval Req.
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700 capitalize">{tool.category}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{tool.scope}</span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          tool.riskLevel === "high"
-                            ? "text-red-700 border-red-300"
-                            : tool.riskLevel === "medium"
-                            ? "text-amber-700 border-amber-300"
-                            : "text-green-700 border-green-300"
-                        }
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHead
+                        key={header.id}
+                        className={header.id === "actions" ? "w-12" : undefined}
                       >
-                        {tool.riskLevel}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <button
-                        onClick={() => openSecretsDialog(tool)}
-                        className="flex items-center gap-1.5 text-sm hover:underline"
-                      >
-                        {tool.secretsConfigured ? (
-                          <>
-                            <CheckCircle2 className="h-4 w-4 text-green-600" />
-                            <span className="text-green-700">Configured</span>
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="h-4 w-4 text-amber-600" />
-                            <span className="text-amber-700">Pending</span>
-                          </>
-                        )}
-                      </button>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{tool.usageCount} calls</span>
-                    </TableCell>
-                    <TableCell>
-                      {tool.lastUsed ? (
-                        <div className="flex items-center gap-1.5 text-sm text-zinc-600">
-                          <Clock className="h-3.5 w-3.5" />
-                          {tool.lastUsed}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-zinc-400">Never</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Configuration
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => openSecretsDialog(tool)}>
-                            <Key className="h-4 w-4 mr-2" />
-                            Manage Secrets
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-red-600">
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Remove Tool
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHead>
+                    ))}
                   </TableRow>
                 ))}
+              </TableHeader>
+              <TableBody>
+                {toolsQuery.isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-zinc-500">
+                      Loading tools...
+                    </TableCell>
+                  </TableRow>
+                ) : toolsQuery.isError ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-red-600">
+                      Unable to load tools.
+                    </TableCell>
+                  </TableRow>
+                ) : table.getRowModel().rows.length ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>
+                          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-zinc-500">
+                      No tools match your search.
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
         </TabsContent>
 
         <TabsContent value="approvals">
-          <div className="border rounded-lg bg-white">
-            <div className="p-6 border-b">
+          <div className="rounded-lg border bg-white">
+            <div className="border-b p-6">
               <h3 className="text-lg font-semibold text-zinc-900">Pending Approvals</h3>
-              <p className="text-sm text-zinc-600 mt-1">
-                Review and approve tool access requests
-              </p>
+              <p className="mt-1 text-sm text-zinc-600">Review and approve tool access requests</p>
             </div>
             <div className="divide-y">
-              {approvalQueue.map((request) => (
-                <div key={request.id} className="p-6">
-                  <div className="flex items-start justify-between mb-4">
-                    <div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <h4 className="text-base font-semibold text-zinc-900">{request.tool}</h4>
-                        <Badge
-                          variant="outline"
-                          className={
-                            request.riskLevel === "high"
-                              ? "text-red-700 border-red-300"
-                              : "text-amber-700 border-amber-300"
-                          }
-                        >
-                          {request.riskLevel} risk
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-zinc-600 mb-2">{request.reason}</p>
-                      <div className="flex items-center gap-4 text-sm text-zinc-500">
-                        <span>Requested by {request.requester}</span>
-                        <span>•</span>
-                        <div className="flex items-center gap-1">
-                          <Clock className="h-3.5 w-3.5" />
-                          {request.requestDate}
+              {approvalQueueQuery.isLoading ? (
+                <div className="p-6 text-sm text-zinc-500">Loading approvals...</div>
+              ) : approvalQueueQuery.isError ? (
+                <div className="p-6 text-sm text-red-600">Unable to load approvals.</div>
+              ) : (
+                approvalQueue.map((request) => (
+                  <div key={request.id} className="p-6">
+                    <div className="mb-4 flex items-start justify-between">
+                      <div>
+                        <div className="mb-2 flex items-center gap-2">
+                          <h4 className="text-base font-semibold text-zinc-900">{request.tool}</h4>
+                          <Badge
+                            variant="outline"
+                            className={
+                              request.riskLevel === "high"
+                                ? "border-red-300 text-red-700"
+                                : "border-amber-300 text-amber-700"
+                            }
+                          >
+                            {request.riskLevel} risk
+                          </Badge>
+                        </div>
+                        <p className="mb-2 text-sm text-zinc-600">{request.reason}</p>
+                        <div className="flex items-center gap-4 text-sm text-zinc-500">
+                          <span>Requested by {request.requester}</span>
+                          <span>•</span>
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3.5 w-3.5" />
+                            {request.requestDate}
+                          </div>
                         </div>
                       </div>
                     </div>
+                    <div className="flex gap-2">
+                      <Button size="sm">
+                        <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                        Approve
+                      </Button>
+                      <Button size="sm" variant="outline">
+                        Reject
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button size="sm">
-                      <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                      Approve
-                    </Button>
-                    <Button size="sm" variant="outline">
-                      Reject
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* Add Tool Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -451,7 +600,6 @@ export function Tools() {
         </DialogContent>
       </Dialog>
 
-      {/* Secrets Management Dialog */}
       <Dialog open={secretsDialogOpen} onOpenChange={setSecretsDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -461,13 +609,14 @@ export function Tools() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
-            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
               <div className="flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
                 <div>
                   <p className="text-sm font-medium text-amber-900">Security Notice</p>
-                  <p className="text-sm text-amber-700 mt-1">
-                    Secrets are encrypted at rest. Once saved, values cannot be retrieved, only replaced.
+                  <p className="mt-1 text-sm text-amber-700">
+                    Secrets are encrypted at rest. Once saved, values cannot be retrieved, only
+                    replaced.
                   </p>
                 </div>
               </div>
@@ -485,7 +634,7 @@ export function Tools() {
               <Input id="endpoint" placeholder="https://api.example.com" />
             </div>
             {selectedTool?.secretsConfigured && (
-              <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 p-3 rounded-md">
+              <div className="flex items-center gap-2 rounded-md bg-green-50 p-3 text-sm text-green-700">
                 <CheckCircle2 className="h-4 w-4" />
                 <span>Current secrets configured on {new Date().toLocaleDateString()}</span>
               </div>

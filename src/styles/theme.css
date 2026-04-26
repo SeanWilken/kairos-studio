@@ -181,28 +181,6 @@
 }
 
 @layer components {
-  [data-slot="tabs-list"] {
-    @apply inline-flex h-10 max-w-full items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted p-1 text-muted-foreground;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-  }
-
-  [data-slot="tabs-list"]::-webkit-scrollbar {
-    display: none;
-  }
-
-  [data-slot="tabs-trigger"] {
-    @apply inline-flex flex-none items-center justify-center whitespace-nowrap rounded-md border border-transparent px-3.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors;
-  }
-
-  [data-slot="tabs-trigger"][data-state="active"] {
-    @apply border-border bg-background text-foreground shadow-sm;
-  }
-
-  [data-slot="tabs-trigger"]:focus-visible {
-    @apply ring-ring/50 outline-none ring-2;
-  }
-
   [data-slot="table-head"] {
     @apply h-11 px-3;
   }
