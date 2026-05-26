@@ -11,6 +11,7 @@ import {
   mapUserRecordToMembershipRequest,
 } from "./mappers";
 import { readWorkspaceTeams, writeWorkspaceTeams } from "../../../../../lib/workspace-scope";
+import { getRuntimeConfig } from "../../../../../config/runtime";
 
 export type WizardVariant =
   | "organization_create"
@@ -676,10 +677,10 @@ export function createProvisioningWizardFormProps(options: {
 }
 
 export function FormWizard(formProps: FormProps) {
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const defaultOrgId = env.VITE_KAIROS_ORG_ID ?? "Development";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const defaultOrgId = runtimeConfig.orgId ?? "org-local";
 
   return (
     

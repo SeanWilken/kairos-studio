@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import {
   FileText,
   Search,
@@ -35,7 +36,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 import {
   clearCreateQueueHistory,
   getCreateQueueState,
@@ -46,131 +47,10 @@ import {
   subscribeCreateQueue,
   type CreateQueueJob,
 } from "../../../lib/create-request-queue";
+import { auditApi, createCoreApiClient } from "../../../lib/api";
 import { submitAgentPersonaRecord, submitOrganizationCreation, submitTeamCreation, submitUserCreation } from "../wizard/registration/steps/TestForm";
 import { getAccessToken } from "../../../lib/auth-session";
-
-const auditEvents = [
-  {
-    id: 1,
-    timestamp: "2026-04-07 14:30",
-    actor: "Sarah Chen",
-    action: "Workflow Executed",
-    category: "workflow",
-    target: "Support Ticket Triage",
-    details: "Completed successfully in 42s",
-    status: "success",
-    ipAddress: "192.168.1.105",
-  },
-  {
-    id: 2,
-    timestamp: "2026-04-07 14:15",
-    actor: "James Kim",
-    action: "User Role Updated",
-    category: "access",
-    target: "Michael Rodriguez",
-    details: "Changed from Member to Division Admin",
-    status: "success",
-    ipAddress: "192.168.1.112",
-  },
-  {
-    id: 3,
-    timestamp: "2026-04-07 14:10",
-    actor: "Emily Watson",
-    action: "Document Uploaded",
-    category: "knowledge",
-    target: "Engineering Runbook",
-    details: "Uploaded to engineering namespace (1.8 MB)",
-    status: "success",
-    ipAddress: "192.168.1.108",
-  },
-  {
-    id: 4,
-    timestamp: "2026-04-07 14:05",
-    actor: "Anna Kowalski",
-    action: "Tool Access Failed",
-    category: "tool",
-    target: "Payment Gateway",
-    details: "Insufficient permissions",
-    status: "error",
-    ipAddress: "192.168.1.120",
-  },
-  {
-    id: 5,
-    timestamp: "2026-04-07 14:00",
-    actor: "Sarah Chen",
-    action: "Persona Created",
-    category: "persona",
-    target: "Code Review Bot v0.5",
-    details: "Draft persona in Engineering scope",
-    status: "success",
-    ipAddress: "192.168.1.105",
-  },
-  {
-    id: 6,
-    timestamp: "2026-04-07 13:55",
-    actor: "Michael Rodriguez",
-    action: "Workflow Failed",
-    category: "workflow",
-    target: "Support Ticket Triage",
-    details: "API timeout on step 2",
-    status: "error",
-    ipAddress: "192.168.1.114",
-  },
-  {
-    id: 7,
-    timestamp: "2026-04-07 13:50",
-    actor: "James Kim",
-    action: "Division Created",
-    category: "access",
-    target: "DevOps Team",
-    details: "Under Engineering organization",
-    status: "success",
-    ipAddress: "192.168.1.112",
-  },
-  {
-    id: 8,
-    timestamp: "2026-04-07 13:45",
-    actor: "Sarah Chen",
-    action: "Tool Secrets Updated",
-    category: "tool",
-    target: "Customer CRM API",
-    details: "API credentials rotated",
-    status: "success",
-    ipAddress: "192.168.1.105",
-  },
-  {
-    id: 9,
-    timestamp: "2026-04-07 13:40",
-    actor: "Emily Watson",
-    action: "Persona Test Run",
-    category: "persona",
-    target: "Customer Support Agent",
-    details: "Test harness: 24 passed, 1 failed",
-    status: "warning",
-    ipAddress: "192.168.1.108",
-  },
-  {
-    id: 10,
-    timestamp: "2026-04-07 13:35",
-    actor: "James Kim",
-    action: "User Invited",
-    category: "access",
-    target: "anna.k@acme.com",
-    details: "Role: Member, Division: Design",
-    status: "success",
-    ipAddress: "192.168.1.112",
-  },
-];
-
-const activitySummary = [
-  { category: "Workflow Executions", count: 142, change: "+12%", trend: "up" },
-  { category: "User Actions", count: 89, change: "+5%", trend: "up" },
-  { category: "Document Operations", count: 34, change: "-3%", trend: "down" },
-  { category: "Access Changes", count: 18, change: "+8%", trend: "up" },
-  { category: "Tool Usage", count: 256, change: "+15%", trend: "up" },
-  { category: "System Errors", count: 7, change: "-45%", trend: "down" },
-];
-
+import { getRuntimeConfig } from "../../../config/runtime"
 const categoryIcons = {
   workflow: Workflow,
   access: Shield,
@@ -179,6 +59,7 @@ const categoryIcons = {
   persona: Users,
 };
 
+
 export function Audit() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -186,16 +67,40 @@ export function Audit() {
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [queueState, setQueueState] = useState(() => getCreateQueueState());
+  const runtimeConfig = getRuntimeConfig();
 
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const orgId = env.VITE_KAIROS_ORG_ID ?? "8a56c7f2-5506-46a3-ae3a-f8dfa36548e2";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const tenantId = runtimeConfig.tenantId;
+  const orgId = runtimeConfig.orgId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
 
   const tabFromQuery = searchParams.get("tab");
   const activeTab = tabFromQuery === "summary" || tabFromQuery === "queue" ? tabFromQuery : "events";
+  const accessToken = getAccessToken();
+  const client = useMemo(
+    () => createCoreApiClient({ baseUrl: runtimeBaseUrl, accessToken, scope: { tenantId, orgId } }),
+    [runtimeBaseUrl, accessToken, tenantId, orgId],
+  );
 
   useEffect(() => subscribeCreateQueue(setQueueState), []);
+
+  const eventsQuery = useQuery({
+    queryKey: ["audit", "events", orgId, filterCategory, filterStatus, searchTerm],
+    enabled: Boolean(accessToken),
+    queryFn: async () => auditApi.listEvents(client, {
+      orgId,
+      category: filterCategory === "all" ? undefined : filterCategory,
+      status: filterStatus === "all" ? undefined : filterStatus,
+      q: searchTerm.trim() || undefined,
+    }),
+    retry: false,
+  });
+
+  const summaryQuery = useQuery({
+    queryKey: ["audit", "summary", orgId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => auditApi.getSummary(client, { orgId }),
+    retry: false,
+  });
 
   const executeQueuedJob = async (job: CreateQueueJob) => {
     const options = {
@@ -219,15 +124,21 @@ export function Audit() {
     await processCreateQueue(async (job) => executeQueuedJob(job));
   };
 
-  const filteredEvents = auditEvents.filter((event) => {
+  const eventItems = eventsQuery.data?.items ?? [];
+
+  const filteredEvents = eventItems.filter((event) => {
     const matchesSearch =
-      event.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      event.actor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      event.target.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = filterCategory === "all" || event.category === filterCategory;
-    const matchesStatus = filterStatus === "all" || event.status === filterStatus;
+      String(event.action ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(event.actor ?? "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(event.target ?? "").toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesCategory = filterCategory === "all" || String(event.category ?? "") === filterCategory;
+    const matchesStatus = filterStatus === "all" || String(event.status ?? "") === filterStatus;
     return matchesSearch && matchesCategory && matchesStatus;
   });
+
+  const activitySummary = summaryQuery.data?.summary ?? [];
+  const activityBreakdown = summaryQuery.data?.breakdown ?? [];
+  const topUsers = summaryQuery.data?.top_users ?? [];
 
   const getCategoryIcon = (category: keyof typeof categoryIcons) => {
     const IconComponent = categoryIcons[category] || FileText;
@@ -311,34 +222,34 @@ export function Audit() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredEvents.map((event) => (
-                  <TableRow key={event.id}>
+                {filteredEvents.map((event, index) => (
+                  <TableRow key={event.event_id ?? `${event.timestamp ?? "ts"}-${index}`}>
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-sm text-zinc-600">
                         <Clock className="h-3.5 w-3.5" />
-                        {event.timestamp}
+                        {event.timestamp ? new Date(event.timestamp).toLocaleString() : "-"}
                       </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <User className="h-4 w-4 text-zinc-500" />
-                        <span className="text-sm font-medium text-zinc-900">{event.actor}</span>
+                        <span className="text-sm font-medium text-zinc-900">{event.actor ?? "-"}</span>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm text-zinc-900">{event.action}</span>
+                      <span className="text-sm text-zinc-900">{event.action ?? "-"}</span>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1.5">
-                        {getCategoryIcon(event.category as keyof typeof categoryIcons)}
-                        <span className="text-sm text-zinc-700 capitalize">{event.category}</span>
+                        {getCategoryIcon(String(event.category ?? "workflow") as keyof typeof categoryIcons)}
+                        <span className="text-sm text-zinc-700 capitalize">{event.category ?? "-"}</span>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm font-medium text-zinc-900">{event.target}</span>
+                      <span className="text-sm font-medium text-zinc-900">{event.target ?? "-"}</span>
                     </TableCell>
                     <TableCell>
-                      <span className="text-sm text-zinc-600">{event.details}</span>
+                      <span className="text-sm text-zinc-600">{event.details ?? "-"}</span>
                     </TableCell>
                     <TableCell>
                       {event.status === "success" ? (
@@ -360,12 +271,19 @@ export function Audit() {
                     </TableCell>
                   </TableRow>
                 ))}
+                {!filteredEvents.length ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-sm text-zinc-500">
+                      {eventsQuery.isLoading ? "Loading audit events..." : eventsQuery.isError ? "Unable to load audit events from API." : "No audit events found."}
+                    </TableCell>
+                  </TableRow>
+                ) : null}
               </TableBody>
             </Table>
           </div>
 
           <div className="flex items-center justify-between text-sm text-zinc-600">
-            <span>Showing {filteredEvents.length} of {auditEvents.length} events</span>
+            <span>Showing {filteredEvents.length} of {eventItems.length} events</span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" disabled>
                 Previous
@@ -392,25 +310,24 @@ export function Audit() {
                           : "text-red-700 border-red-300"
                       }
                     >
-                      {item.change}
+                      {item.change ?? "-"}
                     </Badge>
                   </div>
                   <p className="text-3xl font-bold text-zinc-900">{item.count}</p>
                   <p className="text-xs text-zinc-500 mt-1">Last 7 days</p>
                 </div>
               ))}
+              {!activitySummary.length ? (
+                <div className="col-span-full rounded-lg border bg-white p-6 text-sm text-zinc-500">
+                  {summaryQuery.isLoading ? "Loading activity summary..." : summaryQuery.isError ? "Unable to load activity summary from API." : "No activity summary data available."}
+                </div>
+              ) : null}
             </div>
 
             <div className="border rounded-lg bg-white p-6">
               <h3 className="text-lg font-semibold text-zinc-900 mb-4">Activity by Category</h3>
               <div className="space-y-3">
-                {[
-                  { name: "Workflows", value: 45, color: "bg-green-500" },
-                  { name: "Access Control", value: 25, color: "bg-blue-500" },
-                  { name: "Tools", value: 15, color: "bg-orange-500" },
-                  { name: "Knowledge", value: 10, color: "bg-purple-500" },
-                  { name: "Personas", value: 5, color: "bg-teal-500" },
-                ].map((category) => (
+                {activityBreakdown.map((category) => (
                   <div key={category.name}>
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-sm text-zinc-700">{category.name}</span>
@@ -418,25 +335,20 @@ export function Audit() {
                     </div>
                     <div className="h-2 bg-zinc-100 rounded-full overflow-hidden">
                       <div
-                        className={`h-full ${category.color}`}
+                        className={`h-full ${category.color ?? "bg-zinc-500"}`}
                         style={{ width: `${category.value}%` }}
                       />
                     </div>
                   </div>
                 ))}
+                {!activityBreakdown.length ? <p className="text-sm text-zinc-500">No category breakdown data available.</p> : null}
               </div>
             </div>
 
             <div className="border rounded-lg bg-white p-6">
               <h3 className="text-lg font-semibold text-zinc-900 mb-4">Top Active Users</h3>
               <div className="space-y-3">
-                {[
-                  { name: "Sarah Chen", actions: 142, role: "Global Admin" },
-                  { name: "James Kim", actions: 89, role: "Org Admin" },
-                  { name: "Emily Watson", actions: 67, role: "Member" },
-                  { name: "Michael Rodriguez", actions: 54, role: "Division Admin" },
-                  { name: "Anna Kowalski", actions: 32, role: "Member" },
-                ].map((user) => (
+                {topUsers.map((user) => (
                   <div key={user.name} className="flex items-center justify-between py-2 border-b last:border-0">
                     <div className="flex items-center gap-3">
                       <div className="w-10 h-10 rounded-full bg-zinc-200 flex items-center justify-center">
@@ -444,7 +356,7 @@ export function Audit() {
                       </div>
                       <div>
                         <p className="text-sm font-medium text-zinc-900">{user.name}</p>
-                        <p className="text-xs text-zinc-500">{user.role}</p>
+                        <p className="text-xs text-zinc-500">{user.role ?? "-"}</p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -453,6 +365,7 @@ export function Audit() {
                     </div>
                   </div>
                 ))}
+                {!topUsers.length ? <p className="text-sm text-zinc-500">No top user activity data available.</p> : null}
               </div>
             </div>
 

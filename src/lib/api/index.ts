@@ -7,3 +7,8 @@ export * from "./ingest";
 export * from "./studio";
 export * from "./persona-config";
 export * from "./reviews";
+export * from "./realtime";
+export * from "./governance";
+export * from "./knowledge";
+export * from "./ws-client";
+export * from "./audit";

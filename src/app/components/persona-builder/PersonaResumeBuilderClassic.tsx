@@ -14,7 +14,7 @@ import {
   TabsList,
   TabsTrigger,
   Textarea,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 import { PersonaTraitCard } from "./PersonaTraitCard";
 import { PersonaResumePreview } from "./PersonaResumePreview";
 import { buildPersonaSystemPrompt } from "./prompt";
@@ -58,6 +58,8 @@ export function PersonaResumeBuilderClassic(props: {
     orgId: "",
     scope: "organization",
     modelProfile: "reasoning-optimized",
+    runtimeProviderId: "",
+    runtimeModelId: "",
     traits: ["relaxed", "hand_hold"],
     communicationStyle: "balanced",
     initiativeLevel: "medium",

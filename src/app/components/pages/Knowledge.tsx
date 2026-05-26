@@ -1,38 +1,18 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { AlertCircle, CheckCircle2, Clock3, FileUp, RefreshCw, Upload } from "lucide-react";
 import {
-  Database,
-  Upload,
-  Search,
-  MoreVertical,
-  Edit,
-  Trash2,
-  FileText,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  RefreshCw,
-  Download,
-  Filter,
-} from "lucide-react";
-import {
-  Button,
-  Input,
+  Alert,
+  AlertDescription,
+  AlertTitle,
   Badge,
-  Tabs,
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
   Label,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
   Select,
   SelectContent,
   SelectItem,
@@ -44,573 +24,409 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-  Progress
-} from "@kairosstack/ui";
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Textarea,
+} from "@myai-tech/myui";
+import { createCoreApiClient, governanceApi, knowledgeApi, studioApi, type KnowledgeDocument } from "../../../lib/api";
+import { getAccessToken } from "../../../lib/auth-session";
+import { getRuntimeConfig } from "../../../config/runtime"
 
-const documents = [
-  {
-    id: 1,
-    name: "Product Documentation v4.2",
-    type: "PDF",
-    size: "2.4 MB",
-    namespace: "product-docs",
-    status: "indexed",
-    uploadedBy: "Sarah Chen",
-    uploadDate: "2026-04-06",
-    vectorized: true,
-    chunks: 342,
-  },
-  {
-    id: 2,
-    name: "Customer Support FAQ",
-    type: "Markdown",
-    size: "156 KB",
-    namespace: "support-kb",
-    status: "indexed",
-    uploadedBy: "Emily Watson",
-    uploadDate: "2026-04-05",
-    vectorized: true,
-    chunks: 89,
-  },
-  {
-    id: 3,
-    name: "Engineering Runbook",
-    type: "PDF",
-    size: "1.8 MB",
-    namespace: "engineering",
-    status: "processing",
-    uploadedBy: "James Kim",
-    uploadDate: "2026-04-07",
-    vectorized: false,
-    chunks: 0,
-    progress: 67,
-  },
-  {
-    id: 4,
-    name: "Sales Playbook 2026",
-    type: "DOCX",
-    size: "892 KB",
-    namespace: "sales",
-    status: "indexed",
-    uploadedBy: "Anna Kowalski",
-    uploadDate: "2026-04-04",
-    vectorized: true,
-    chunks: 124,
-  },
-  {
-    id: 5,
-    name: "API Reference Guide",
-    type: "HTML",
-    size: "3.1 MB",
-    namespace: "engineering",
-    status: "queued",
-    uploadedBy: "Michael Rodriguez",
-    uploadDate: "2026-04-07",
-    vectorized: false,
-    chunks: 0,
-  },
-];
 
-const namespaces = [
-  {
-    id: 1,
-    name: "product-docs",
-    description: "Product documentation and specifications",
-    documentCount: 12,
-    totalSize: "8.4 MB",
-    scope: "All Divisions",
-  },
-  {
-    id: 2,
-    name: "support-kb",
-    description: "Customer support knowledge base",
-    documentCount: 24,
-    totalSize: "4.2 MB",
-    scope: "Support Division",
-  },
-  {
-    id: 3,
-    name: "engineering",
-    description: "Engineering documentation and runbooks",
-    documentCount: 18,
-    totalSize: "15.7 MB",
-    scope: "Engineering",
-  },
-  {
-    id: 4,
-    name: "sales",
-    description: "Sales materials and playbooks",
-    documentCount: 8,
-    totalSize: "3.6 MB",
-    scope: "Sales Division",
-  },
-];
+function normalizeItems<T>(value: unknown): T[] {
+  if (Array.isArray((value as { items?: unknown })?.items)) return (value as { items: T[] }).items;
+  return Array.isArray(value) ? (value as T[]) : [];
+}
 
-const vectorizationQueue = [
-  {
-    id: 1,
-    document: "Engineering Runbook",
-    status: "processing",
-    progress: 67,
-    eta: "2 minutes",
-  },
-  {
-    id: 2,
-    document: "API Reference Guide",
-    status: "queued",
-    progress: 0,
-    eta: "5 minutes",
-  },
-  {
-    id: 3,
-    document: "Marketing Guidelines",
-    status: "queued",
-    progress: 0,
-    eta: "8 minutes",
-  },
-];
+type UploadQueueItem = {
+  id: string;
+  filename: string;
+  status: "queued" | "uploaded" | "failed";
+  details?: string;
+};
+
+const visibilityScopes = ["private", "user", "group", "team", "org", "tenant", "restricted"] as const;
 
 export function Knowledge() {
+  const [tab, setTab] = useState("upload");
   const [searchTerm, setSearchTerm] = useState("");
-  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
-  const [namespaceDialogOpen, setNamespaceDialogOpen] = useState(false);
-  const [testDialogOpen, setTestDialogOpen] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState("");
+  const [visibilityScope, setVisibilityScope] = useState<(typeof visibilityScopes)[number]>("org");
+  const [title, setTitle] = useState("");
+  const [summary, setSummary] = useState("");
+  const [tags, setTags] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
+  const [noteTitle, setNoteTitle] = useState("");
+  const [noteContent, setNoteContent] = useState("");
+  const [policyPrincipalId, setPolicyPrincipalId] = useState("");
+  const [lastError, setLastError] = useState("");
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const accessToken = getAccessToken();
 
-  const filteredDocuments = documents.filter((doc) =>
-    doc.name.toLowerCase().includes(searchTerm.toLowerCase())
+  const client = useMemo(
+    () => createCoreApiClient({ baseUrl: runtimeBaseUrl, accessToken, scope: { tenantId, orgId: selectedOrgId || undefined } }),
+    [runtimeBaseUrl, accessToken, tenantId, selectedOrgId],
   );
+
+  const organizationsQuery = useQuery({
+    queryKey: ["knowledge", "organizations", tenantId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => normalizeItems(await studioApi.listOrganizations(client)),
+  });
+
+  useEffect(() => {
+    const organizations = organizationsQuery.data ?? [];
+    if (!organizations.length) return;
+    if (!selectedOrgId || !organizations.some((organization) => organization.id === selectedOrgId)) {
+      setSelectedOrgId(organizations[0].id);
+    }
+  }, [organizationsQuery.data, selectedOrgId]);
+
+  const documentsQuery = useQuery({
+    queryKey: ["knowledge", "documents", selectedOrgId, searchTerm],
+    enabled: Boolean(accessToken && selectedOrgId),
+    queryFn: async () => knowledgeApi.listDocuments(client, selectedOrgId, { search: searchTerm || undefined }),
+  });
+
+  const createNoteMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedOrgId) throw new Error("Select an organization first.");
+      if (!noteTitle.trim() || !noteContent.trim()) throw new Error("Note title and content are required.");
+      return knowledgeApi.createNote(client, {
+        org_id: selectedOrgId,
+        title: noteTitle.trim(),
+        content: noteContent.trim(),
+        summary: summary.trim() || undefined,
+        tags_json: tags.trim() ? JSON.stringify(tags.split(",").map((item) => item.trim()).filter(Boolean)) : undefined,
+        visibility_json: JSON.stringify({ scope: visibilityScope }),
+      });
+    },
+    onSuccess: async () => {
+      setLastError("");
+      setNoteTitle("");
+      setNoteContent("");
+      setTab("documents");
+      await documentsQuery.refetch();
+    },
+    onError: (error) => setLastError(error instanceof Error ? error.message : "Create note failed."),
+  });
+
+  const uploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedOrgId) throw new Error("Select an organization first.");
+      if (!files.length) throw new Error("Select at least one file.");
+
+      const queueEntries = files.map((file) => ({ id: `${file.name}-${file.lastModified}`, filename: file.name, status: "queued" as const }));
+      setUploadQueue(queueEntries);
+
+      for (const file of files) {
+        const rowId = `${file.name}-${file.lastModified}`;
+        try {
+          const result = await knowledgeApi.uploadFile(client, {
+            org_id: selectedOrgId,
+            file,
+            title: title.trim() || file.name,
+            summary: summary.trim() || undefined,
+            tags_json: tags.trim() ? JSON.stringify(tags.split(",").map((item) => item.trim()).filter(Boolean)) : undefined,
+            visibility_json: JSON.stringify({ scope: visibilityScope }),
+            metadata_json: JSON.stringify({ source_type: "file" }),
+          });
+
+          setUploadQueue((previous) => previous.map((item) => (item.id === rowId ? {
+            ...item,
+            status: "uploaded",
+            details: `${result.storage_backend ?? "storage"} • ${result.processing_status ?? "uploaded"}`,
+          } : item)));
+        } catch (error) {
+          setUploadQueue((previous) => previous.map((item) => (item.id === rowId ? {
+            ...item,
+            status: "failed",
+            details: error instanceof Error ? error.message : "Upload failed.",
+          } : item)));
+        }
+      }
+    },
+    onSuccess: async () => {
+      setFiles([]);
+      await documentsQuery.refetch();
+    },
+    onError: (error) => setLastError(error instanceof Error ? error.message : "Upload failed."),
+  });
+
+  const reprocessMutation = useMutation({
+    mutationFn: async (documentId: string) => knowledgeApi.reprocessDocument(client, documentId),
+    onSuccess: async () => {
+      await documentsQuery.refetch();
+    },
+  });
+
+  const policyDecisionMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedOrgId || !policyPrincipalId.trim()) throw new Error("Org and principal are required.");
+      return governanceApi.evaluatePolicyDecision(client, {
+        org_id: selectedOrgId,
+        principal_id: policyPrincipalId.trim(),
+        principal_kind: "user",
+        action: "knowledge.document.upload",
+        resource: { visibility_scope: visibilityScope },
+      });
+    },
+    onError: (error) => setLastError(error instanceof Error ? error.message : "Policy decision failed."),
+  });
+
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      if (!selectedOrgId || !policyPrincipalId.trim()) throw new Error("Org and principal are required.");
+      return governanceApi.explainContextAccess(client, {
+        org_id: selectedOrgId,
+        principal_id: policyPrincipalId.trim(),
+        principal_kind: "user",
+        lens: "knowledge.resolve",
+      });
+    },
+    onError: (error) => setLastError(error instanceof Error ? error.message : "Explain failed."),
+  });
+
+  const documents = documentsQuery.data?.items ?? [];
+  const organizationOptions = organizationsQuery.data ?? [];
+  const selectedOrgValue = organizationOptions.some((organization) => organization.id === selectedOrgId)
+    ? selectedOrgId
+    : undefined;
+  const selectedOrgLabel = organizationOptions.find((organization) => organization.id === selectedOrgValue)?.name;
+
+  const onFilesChosen = (fileList: FileList | null) => {
+    if (!fileList) return;
+    setFiles(Array.from(fileList));
+  };
+
+  const onDropFiles = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    onFilesChosen(event.dataTransfer.files);
+  };
+
+  const statusBadge = (document: KnowledgeDocument) => {
+    const status = document.processing_status ?? document.status ?? "unknown";
+    if (status === "indexed") return <Badge className="bg-emerald-100 text-emerald-800">indexed</Badge>;
+    if (status === "failed") return <Badge variant="destructive">failed</Badge>;
+    if (status === "uploaded" || status === "extracting" || status === "extracted" || status === "indexing") {
+      return <Badge className="bg-amber-100 text-amber-900">{status}</Badge>;
+    }
+    return <Badge variant="secondary">{String(status)}</Badge>;
+  };
 
   return (
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-zinc-900">Knowledge & Data Ops</h1>
-        <p className="text-zinc-600 mt-1">Manage documents, indexes, and retrieval systems</p>
+        <h1 className="text-3xl font-bold text-zinc-900">Knowledge Governance</h1>
+        <p className="mt-1 text-zinc-600">Distinct file uploads and notes with a clear processing lifecycle.</p>
       </div>
 
-      {/* Vectorization Status Banner */}
-      {vectorizationQueue.filter(q => q.status === 'processing' || q.status === 'queued').length > 0 && (
-        <div className="mb-6 border rounded-lg bg-blue-50 border-blue-200 p-4">
-          <div className="flex items-start justify-between">
-            <div className="flex items-start gap-3">
-              <RefreshCw className="h-5 w-5 text-blue-600 animate-spin flex-shrink-0 mt-0.5" />
-              <div>
-                <h3 className="text-sm font-semibold text-blue-900">Vectorization in Progress</h3>
-                <p className="text-sm text-blue-700 mt-0.5">
-                  {vectorizationQueue.filter(q => q.status === 'processing').length} processing,{' '}
-                  {vectorizationQueue.filter(q => q.status === 'queued').length} queued
-                </p>
-              </div>
-            </div>
-            <Button variant="outline" size="sm">
-              View Queue
-            </Button>
+      <Card className="mb-6">
+        <CardHeader>
+          <CardTitle className="text-base">Context</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 pb-6 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Organization</Label>
+            <Select value={selectedOrgValue} onValueChange={setSelectedOrgId}>
+              <SelectTrigger>
+                <span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span>
+              </SelectTrigger>
+              <SelectContent>
+                {organizationOptions.map((organization) => (
+                  <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
-        </div>
-      )}
+          <div className="space-y-1.5">
+            <Label>Visibility scope</Label>
+            <Select value={visibilityScope} onValueChange={(value) => setVisibilityScope(value as (typeof visibilityScopes)[number])}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {visibilityScopes.map((scope) => (
+                  <SelectItem key={scope} value={scope}>{scope}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
 
-      <Tabs defaultValue="documents" className="space-y-6">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
         <TabsList>
+          <TabsTrigger value="upload">Upload Files</TabsTrigger>
+          <TabsTrigger value="note">Create Knowledge Note</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
-          <TabsTrigger value="namespaces">Namespaces</TabsTrigger>
-          <TabsTrigger value="vectorization">Vectorization Queue</TabsTrigger>
-          <TabsTrigger value="retrieval">Retrieval Test</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="documents" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex gap-2 flex-1 max-w-2xl">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-                <Input
-                  placeholder="Search documents..."
-                  className="pl-9"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+        <TabsContent value="upload">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Upload Files</CardTitle></CardHeader>
+            <CardContent className="space-y-3 pb-6">
+              <div
+                className="rounded-md border border-dashed border-zinc-300 p-6 text-center"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={onDropFiles}
+              >
+                <FileUp className="mx-auto mb-2 h-6 w-6 text-zinc-500" />
+                <p className="text-sm text-zinc-700">Drag and drop files here, or choose files</p>
+                <Input type="file" multiple className="mt-3" onChange={(event) => onFilesChosen(event.target.files)} />
               </div>
-              <Button variant="outline">
-                <Filter className="h-4 w-4 mr-2" />
-                Filter
-              </Button>
-            </div>
-            <Button onClick={() => setUploadDialogOpen(true)}>
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Document
-            </Button>
-          </div>
-
-          <div className="border rounded-lg bg-white">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Document</TableHead>
-                  <TableHead>Namespace</TableHead>
-                  <TableHead>Size</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Chunks</TableHead>
-                  <TableHead>Uploaded</TableHead>
-                  <TableHead className="w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredDocuments.map((doc) => (
-                  <TableRow key={doc.id}>
-                    <TableCell>
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-                          <FileText className="h-5 w-5 text-blue-600" />
-                        </div>
-                        <div>
-                          <div className="font-medium text-zinc-900">{doc.name}</div>
-                          <div className="text-sm text-zinc-500">{doc.type}</div>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">
-                        {doc.namespace}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">{doc.size}</span>
-                    </TableCell>
-                    <TableCell>
-                      {doc.status === "indexed" ? (
-                        <div className="flex items-center gap-1.5">
-                          <CheckCircle2 className="h-4 w-4 text-green-600" />
-                          <span className="text-sm text-green-700">Indexed</span>
-                        </div>
-                      ) : doc.status === "processing" ? (
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-1.5">
-                            <RefreshCw className="h-4 w-4 text-blue-600 animate-spin" />
-                            <span className="text-sm text-blue-700">Processing</span>
-                          </div>
-                          <Progress value={doc.progress} className="h-1.5 w-24" />
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5">
-                          <Clock className="h-4 w-4 text-amber-600" />
-                          <span className="text-sm text-amber-700">Queued</span>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-zinc-700">
-                        {doc.chunks > 0 ? doc.chunks : "—"}
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label>Title override (optional)</Label>
+                  <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Incident runbook" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Tags CSV</Label>
+                  <Input value={tags} onChange={(event) => setTags(event.target.value)} placeholder="incident,ops" />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>Summary (optional)</Label>
+                  <Textarea value={summary} onChange={(event) => setSummary(event.target.value)} rows={3} />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => void uploadMutation.mutate()} disabled={!selectedOrgId || uploadMutation.isPending || files.length === 0}>
+                  <Upload className="mr-2 h-4 w-4" />Upload files
+                </Button>
+              </div>
+              {uploadQueue.length ? (
+                <div className="space-y-2 rounded-md border border-zinc-200 p-3">
+                  {uploadQueue.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between text-sm">
+                      <span>{item.filename}</span>
+                      <span className={item.status === "failed" ? "text-red-700" : item.status === "uploaded" ? "text-emerald-700" : "text-zinc-600"}>
+                        {item.status}{item.details ? ` • ${item.details}` : ""}
                       </span>
-                    </TableCell>
-                    <TableCell>
-                      <div>
-                        <div className="text-sm text-zinc-700">{doc.uploadDate}</div>
-                        <div className="text-xs text-zinc-500">{doc.uploadedBy}</div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon">
-                            <MoreVertical className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem>
-                            <Download className="h-4 w-4 mr-2" />
-                            Download
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Edit className="h-4 w-4 mr-2" />
-                            Edit Metadata
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <RefreshCw className="h-4 w-4 mr-2" />
-                            Re-vectorize
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-red-600">
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </TableCell>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="note">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Create Knowledge Note</CardTitle></CardHeader>
+            <CardContent className="space-y-3 pb-6">
+              <div className="space-y-1.5">
+                <Label>Title</Label>
+                <Input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} placeholder="Release checklist notes" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Content</Label>
+                <Textarea value={noteContent} onChange={(event) => setNoteContent(event.target.value)} rows={8} placeholder="Write markdown or plain text note content..." />
+              </div>
+              <div className="flex justify-end">
+                <Button type="button" onClick={() => void createNoteMutation.mutate()} disabled={!selectedOrgId || createNoteMutation.isPending}>
+                  Create note
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="documents">
+          <Card>
+            <CardHeader><CardTitle className="text-base">Documents</CardTitle></CardHeader>
+            <CardContent className="space-y-3 pb-6">
+              <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search documents" />
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name / Title</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Size</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Modified</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="namespaces">
-          <div className="flex items-center justify-end mb-4">
-            <Button onClick={() => setNamespaceDialogOpen(true)}>
-              <Database className="h-4 w-4 mr-2" />
-              Create Namespace
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {namespaces.map((namespace) => (
-              <div key={namespace.id} className="border rounded-lg bg-white p-6">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-start gap-3">
-                    <div className="w-12 h-12 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0">
-                      <Database className="h-6 w-6 text-purple-600" />
-                    </div>
-                    <div>
-                      <h3 className="text-lg font-semibold text-zinc-900">{namespace.name}</h3>
-                      <p className="text-sm text-zinc-600 mt-0.5">{namespace.description}</p>
-                    </div>
-                  </div>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon">
-                        <MoreVertical className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem>
-                        <Edit className="h-4 w-4 mr-2" />
-                        Edit
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-red-600">
-                        <Trash2 className="h-4 w-4 mr-2" />
-                        Delete
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-600">Documents</span>
-                    <span className="font-medium text-zinc-900">{namespace.documentCount}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-600">Total Size</span>
-                    <span className="font-medium text-zinc-900">{namespace.totalSize}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-600">Scope</span>
-                    <Badge variant="outline" className="text-xs">
-                      {namespace.scope}
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="vectorization">
-          <div className="border rounded-lg bg-white">
-            <div className="p-6 border-b">
-              <h3 className="text-lg font-semibold text-zinc-900">Ingest & Vectorization Status</h3>
-              <p className="text-sm text-zinc-600 mt-1">
-                Monitor document processing and embedding generation
-              </p>
-            </div>
-            <div className="divide-y">
-              {vectorizationQueue.map((item) => (
-                <div key={item.id} className="p-6">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-3">
-                      {item.status === "processing" ? (
-                        <RefreshCw className="h-5 w-5 text-blue-600 animate-spin flex-shrink-0" />
-                      ) : (
-                        <Clock className="h-5 w-5 text-amber-600 flex-shrink-0" />
-                      )}
-                      <div>
-                        <h4 className="text-sm font-semibold text-zinc-900">{item.document}</h4>
-                        <p className="text-sm text-zinc-600">
-                          {item.status === "processing" ? "Processing..." : "Waiting in queue"}
-                        </p>
-                      </div>
-                    </div>
-                    <Badge
-                      variant={item.status === "processing" ? "default" : "secondary"}
-                      className={item.status === "processing" ? "bg-blue-100 text-blue-800" : ""}
-                    >
-                      {item.status}
-                    </Badge>
-                  </div>
-                  {item.progress > 0 && (
-                    <div className="space-y-1">
-                      <Progress value={item.progress} className="h-2" />
-                      <div className="flex items-center justify-between text-xs text-zinc-600">
-                        <span>{item.progress}% complete</span>
-                        <span>ETA: {item.eta}</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="retrieval">
-          <div className="border rounded-lg bg-white p-6">
-            <h3 className="text-lg font-semibold text-zinc-900 mb-4">Retrieval Validation Playground</h3>
-            <p className="text-sm text-zinc-600 mb-6">
-              Test document retrieval and grounding with sample queries
-            </p>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="test-query">Test Query</Label>
-                <Input
-                  id="test-query"
-                  placeholder="Enter a test query to validate retrieval..."
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="test-namespace">Namespace</Label>
-                <Select>
-                  <SelectTrigger id="test-namespace">
-                    <SelectValue placeholder="Select namespace" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {namespaces.map((ns) => (
-                      <SelectItem key={ns.id} value={ns.name}>
-                        {ns.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={() => setTestDialogOpen(true)}>
-                <Search className="h-4 w-4 mr-2" />
-                Run Test Query
-              </Button>
-            </div>
-
-            <div className="mt-6 p-4 bg-zinc-50 rounded-lg">
-              <p className="text-sm text-zinc-700">
-                Test results will show retrieved chunks, relevance scores, and grounding validation.
-              </p>
-            </div>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {documents.map((document) => (
+                    <TableRow key={document.id}>
+                      <TableCell>{document.title ?? document.filename ?? document.id}</TableCell>
+                      <TableCell>{document.source_type ?? "file"}</TableCell>
+                      <TableCell>{document.content_type ?? "-"}</TableCell>
+                      <TableCell>{typeof document.size_bytes === "number" ? `${document.size_bytes} B` : "-"}</TableCell>
+                      <TableCell>{statusBadge(document)}</TableCell>
+                      <TableCell>{document.updated_at ? new Date(document.updated_at).toLocaleString() : document.created_at ? new Date(document.created_at).toLocaleString() : "-"}</TableCell>
+                      <TableCell>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={reprocessMutation.isPending}
+                          onClick={() => void reprocessMutation.mutate(document.id)}
+                        >
+                          <RefreshCw className="mr-1 h-3.5 w-3.5" />Reprocess
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {!documents.length ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-sm text-zinc-500">
+                        {documentsQuery.isLoading ? "Loading documents..." : "No documents found for this organization."}
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 
-      {/* Upload Dialog */}
-      <Dialog open={uploadDialogOpen} onOpenChange={setUploadDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Upload Document</DialogTitle>
-            <DialogDescription>
-              Add a new document to your knowledge base.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="border-2 border-dashed rounded-lg p-8 text-center">
-              <Upload className="h-12 w-12 text-zinc-400 mx-auto mb-3" />
-              <p className="text-sm text-zinc-700 mb-1">Click to upload or drag and drop</p>
-              <p className="text-xs text-zinc-500">PDF, DOCX, TXT, Markdown, or HTML</p>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="doc-namespace">Namespace</Label>
-              <Select>
-                <SelectTrigger id="doc-namespace">
-                  <SelectValue placeholder="Select namespace" />
-                </SelectTrigger>
-                <SelectContent>
-                  {namespaces.map((ns) => (
-                    <SelectItem key={ns.id} value={ns.name}>
-                      {ns.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+      <Card className="mt-6">
+        <CardHeader><CardTitle className="text-base">Policy Preflight & Explain</CardTitle></CardHeader>
+        <CardContent className="space-y-3 pb-6">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Principal user id</Label>
+              <Input value={policyPrincipalId} onChange={(event) => setPolicyPrincipalId(event.target.value)} placeholder="user_..." />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setUploadDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => setUploadDialogOpen(false)}>Upload</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => void policyDecisionMutation.mutate()} disabled={!selectedOrgId || !policyPrincipalId.trim() || policyDecisionMutation.isPending}>Run policy decision</Button>
+            <Button type="button" variant="outline" onClick={() => void explainMutation.mutate()} disabled={!selectedOrgId || !policyPrincipalId.trim() || explainMutation.isPending}>Run context explain</Button>
+          </div>
+          <pre className="max-h-[320px] overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-xs">{JSON.stringify({ policy_decision: policyDecisionMutation.data ?? null, context_explain: explainMutation.data ?? null }, null, 2)}</pre>
+        </CardContent>
+      </Card>
 
-      {/* Create Namespace Dialog */}
-      <Dialog open={namespaceDialogOpen} onOpenChange={setNamespaceDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create Namespace</DialogTitle>
-            <DialogDescription>
-              Create a new namespace for organizing documents.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="namespace-name">Namespace Name</Label>
-              <Input id="namespace-name" placeholder="e.g., product-docs" />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="namespace-description">Description</Label>
-              <Input id="namespace-description" placeholder="Describe this namespace..." />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="namespace-scope">Scope</Label>
-              <Select>
-                <SelectTrigger id="namespace-scope">
-                  <SelectValue placeholder="Select scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Divisions</SelectItem>
-                  <SelectItem value="engineering">Engineering</SelectItem>
-                  <SelectItem value="sales">Sales Division</SelectItem>
-                  <SelectItem value="support">Support Division</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setNamespaceDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => setNamespaceDialogOpen(false)}>Create Namespace</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {lastError || organizationsQuery.isError || documentsQuery.isError ? (
+        <Alert className="mt-6 border-red-200 bg-red-50">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Knowledge request failed</AlertTitle>
+          <AlertDescription>{lastError || "Unable to load knowledge data."}</AlertDescription>
+        </Alert>
+      ) : null}
 
-      {/* Test Results Dialog */}
-      <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Retrieval Test Results</DialogTitle>
-            <DialogDescription>
-              Top matching chunks and relevance scores
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3 py-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="border rounded-lg p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-zinc-600" />
-                    <span className="text-sm font-medium text-zinc-900">
-                      Product Documentation v4.2
-                    </span>
-                  </div>
-                  <Badge variant="outline" className="text-xs">
-                    Score: 0.{95 - i * 10}
-                  </Badge>
-                </div>
-                <p className="text-sm text-zinc-700">
-                  Sample retrieved chunk content showing relevant information from the document...
-                </p>
-              </div>
-            ))}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setTestDialogOpen(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {uploadMutation.isSuccess || createNoteMutation.isSuccess ? (
+        <Alert className="mt-4 border-emerald-200 bg-emerald-50">
+          <CheckCircle2 className="h-4 w-4" />
+          <AlertTitle>Saved</AlertTitle>
+          <AlertDescription>Knowledge item saved. Processing status is shown in Documents.</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {reprocessMutation.isPending ? (
+        <Alert className="mt-4 border-amber-200 bg-amber-50">
+          <Clock3 className="h-4 w-4" />
+          <AlertTitle>Reprocess in progress</AlertTitle>
+          <AlertDescription>Refreshing document processing status...</AlertDescription>
+        </Alert>
+      ) : null}
     </div>
   );
 }

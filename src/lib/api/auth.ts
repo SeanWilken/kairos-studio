@@ -31,6 +31,24 @@ export type AuthTokenSet = {
   [key: string]: unknown;
 };
 
+export type AuthContextSwitchPayload = {
+  org_id: string;
+};
+
+export type AuthMeOrgOption = {
+  org_id: string;
+  name?: string;
+  slug?: string;
+  role?: string;
+  [key: string]: unknown;
+};
+
+export type AuthMeResponse = Record<string, unknown> & {
+  tenant_id?: string;
+  org_id?: string;
+  org_options?: AuthMeOrgOption[];
+};
+
 export const authApi = {
   register: (client: CoreApiClient, payload: RegisterPayload) =>
     client.post<AuthTokenSet | Record<string, unknown>>("/v1/auth/register", payload),
@@ -44,5 +62,8 @@ export const authApi = {
   logout: (client: CoreApiClient, payload: RefreshPayload) =>
     client.post<Record<string, unknown>>("/v1/auth/logout", payload),
 
-  me: (client: CoreApiClient) => client.get<Record<string, unknown>>("/v1/auth/me"),
+  me: (client: CoreApiClient) => client.get<AuthMeResponse>("/v1/auth/me"),
+
+  switchContext: (client: CoreApiClient, payload: AuthContextSwitchPayload) =>
+    client.post<AuthTokenSet | Record<string, unknown>>("/v1/auth/context/switch", payload),
 };

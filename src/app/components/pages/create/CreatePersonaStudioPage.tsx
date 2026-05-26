@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "@kairosstack/ui";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "@myai-tech/myui";
 import { PackImportWorkflow } from "../../persona-builder/PackImportWorkflow";
 import { PersonaResumeBuilder_OLD } from "../../persona-builder/PersonaResumeBuilder_OLD";
 import { slugify } from "../../persona-builder/prompt";
 import type { PersonaBuilderValues } from "../../persona-builder/types";
 import { createCoreApiClient, studioApi } from "../../../../lib/api";
 import { getAccessToken } from "../../../../lib/auth-session";
+import { getRuntimeConfig } from "@/config/runtime";
 
 function maybeRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
@@ -43,6 +44,8 @@ function mapExportToBuilderValues(
     summary: maybeString(resume.summary) || maybeString(detailData.summary),
     scope: maybeString(resume.scope) || maybeString(detail.scope) || "organization",
     modelProfile: maybeString(resume.model_profile) || maybeString(detail.model_profile) || "reasoning-optimized",
+    runtimeProviderId: maybeString(resume.runtime_provider_id) || maybeString(detail.runtime_provider_id),
+    runtimeModelId: maybeString(resume.runtime_model_id) || maybeString(detail.runtime_model_id),
     traits: maybeStringArray(resume.traits).length > 0 ? maybeStringArray(resume.traits) : maybeStringArray(detailData.traits),
     communicationStyle: maybeString(resume.communication_style) || maybeString(detailData.communication_style) || "balanced",
     initiativeLevel: maybeString(resume.initiative_level) || maybeString(detailData.initiative_level) || "medium",
@@ -56,10 +59,10 @@ function mapExportToBuilderValues(
 }
 
 export function CreatePersonaStudioPage() {
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const defaultOrgId = env.VITE_KAIROS_ORG_ID ?? "8a56c7f2-5506-46a3-ae3a-f8dfa36548e2";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const defaultOrgId = runtimeConfig.orgId ?? "org-local";
   const [accessToken] = useState(() => getAccessToken());
   const [selectedPersonaId, setSelectedPersonaId] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -131,6 +134,8 @@ export function CreatePersonaStudioPage() {
         role: values.role,
         scope: values.scope,
         model_profile: values.modelProfile,
+        runtime_provider_id: values.runtimeProviderId || undefined,
+        runtime_model_id: values.runtimeModelId || undefined,
         system_prompt: values.systemPromptOverride || systemPrompt,
         data: {
           industry: values.industry,
@@ -184,31 +189,7 @@ export function CreatePersonaStudioPage() {
         mode: testMode,
       };
 
-      try {
-        return await studioApi.chatInChannel(client, channelId, {
-          ...basePayload,
-          prompt_override: builderPrompt,
-          draft_persona: builderDraft ? {
-            name: builderDraft.name,
-            role: builderDraft.role,
-            industry: builderDraft.industry,
-            headline: builderDraft.headline,
-            summary: builderDraft.summary,
-            scope: builderDraft.scope,
-            model_profile: builderDraft.modelProfile,
-            traits: builderDraft.traits,
-            communication_style: builderDraft.communicationStyle,
-            initiative_level: builderDraft.initiativeLevel,
-            tone: builderDraft.tone,
-            do_list: builderDraft.doList,
-            dont_list: builderDraft.dontList,
-            guardrails: builderDraft.guardrails,
-            tools: builderDraft.tools,
-          } : undefined,
-        });
-      } catch {
-        return studioApi.chatInChannel(client, channelId, basePayload);
-      }
+      return studioApi.chatInChannel(client, channelId, basePayload);
     },
     onSuccess: (response) => {
       setTestError("");

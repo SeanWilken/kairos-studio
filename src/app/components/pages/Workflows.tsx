@@ -42,7 +42,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 
 const workflows = [
   {

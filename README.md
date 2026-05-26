@@ -1,4 +1,4 @@
-# @figma/my-make-file
+# @myai-tech/studio
 
 This project was generated with Figma Make and is intended as a local React/Vite frontend workspace.
 

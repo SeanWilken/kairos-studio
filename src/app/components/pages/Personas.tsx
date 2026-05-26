@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import {
   Users,
   Plus,
@@ -38,66 +39,26 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
+import { authApi, createCoreApiClient, realtimeApi, studioApi } from "../../../lib/api";
+import { getAccessToken } from "../../../lib/auth-session";
+import { getRuntimeConfig } from "../../../config/runtime"
 
-const personas = [
-  {
-    id: 1,
-    name: "Customer Support Agent",
-    role: "Support Specialist",
-    status: "active",
-    version: "v2.3",
-    scope: "Support Division",
-    description: "Handles customer inquiries, ticket management, and basic troubleshooting",
-    capabilities: ["email", "ticket_system", "knowledge_base"],
-    guardrails: ["no_refunds_over_1000", "escalate_legal_issues"],
-    testsPassed: 24,
-    testsFailed: 1,
-    lastUpdated: "2026-04-06",
-  },
-  {
-    id: 2,
-    name: "Data Analysis Assistant",
-    role: "Analyst",
-    status: "active",
-    version: "v1.8",
-    scope: "Engineering",
-    description: "Analyzes datasets, generates reports, and provides insights",
-    capabilities: ["database_read", "api_access", "report_generation"],
-    guardrails: ["read_only_db", "no_pii_export"],
-    testsPassed: 18,
-    testsFailed: 0,
-    lastUpdated: "2026-04-05",
-  },
-  {
-    id: 3,
-    name: "Code Review Bot",
-    role: "Developer Assistant",
-    status: "draft",
-    version: "v0.5",
-    scope: "Engineering",
-    description: "Reviews pull requests and suggests improvements",
-    capabilities: ["git_access", "code_analysis"],
-    guardrails: ["no_auto_merge", "require_human_approval"],
-    testsPassed: 12,
-    testsFailed: 3,
-    lastUpdated: "2026-04-07",
-  },
-  {
-    id: 4,
-    name: "Sales Outreach Agent",
-    role: "Sales Assistant",
-    status: "review",
-    version: "v1.2",
-    scope: "Sales Division",
-    description: "Drafts personalized outreach emails and follows up with leads",
-    capabilities: ["email", "crm_access", "calendar"],
-    guardrails: ["no_discounts_without_approval", "max_3_followups"],
-    testsPassed: 15,
-    testsFailed: 2,
-    lastUpdated: "2026-04-04",
-  },
-];
+type PersonaLibraryItem = {
+  id: string;
+  name: string;
+  role: string;
+  status: "active" | "draft" | "review";
+  version: string;
+  scope: string;
+  description: string;
+  capabilities: string[];
+  guardrails: string[];
+  testsPassed: number;
+  testsFailed: number;
+  lastUpdated: string;
+  slug: string;
+};
 
 const testResults = [
   { id: 1, scenario: "Customer complaint about delayed shipment", result: "pass", response: "Correctly escalated to supervisor" },
@@ -109,10 +70,82 @@ const testResults = [
 
 export function Personas() {
   const navigate = useNavigate();
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const defaultOrgId = runtimeConfig.orgId ?? "org-local";
+  const [accessToken] = useState(() => getAccessToken());
   const [searchTerm, setSearchTerm] = useState("");
+  const [activeOrgId, setActiveOrgId] = useState(defaultOrgId);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [testDialogOpen, setTestDialogOpen] = useState(false);
-  const [selectedPersona, setSelectedPersona] = useState<typeof personas[0] | null>(null);
+  const [selectedPersona, setSelectedPersona] = useState<PersonaLibraryItem | null>(null);
+
+  const client = useMemo(
+    () => createCoreApiClient({ baseUrl: runtimeBaseUrl, accessToken, scope: { tenantId, orgId: activeOrgId } }),
+    [runtimeBaseUrl, accessToken, tenantId, activeOrgId],
+  );
+
+  const organizationsQuery = useQuery({
+    queryKey: ["persona-library", "organizations", tenantId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => {
+      const response = await studioApi.listOrganizations(client);
+      return response.items ?? [];
+    },
+  });
+
+  const meQuery = useQuery({
+    queryKey: ["persona-library", "me"],
+    enabled: Boolean(accessToken),
+    queryFn: async () => authApi.me(client),
+  });
+
+  const organizationOptions = useMemo(() => {
+    const fromMe = Array.isArray(meQuery.data?.org_options)
+      ? meQuery.data.org_options
+          .filter((option): option is { org_id: string; name?: string } => typeof option?.org_id === "string")
+          .map((option) => ({ id: option.org_id, name: option.name ?? option.org_id }))
+      : [];
+    if (fromMe.length > 0) return fromMe;
+    return organizationsQuery.data ?? [];
+  }, [meQuery.data, organizationsQuery.data]);
+
+  const selectedOrgValue = organizationOptions.some((organization) => organization.id === activeOrgId)
+    ? activeOrgId
+    : "__none_org";
+
+  const personasQuery = useQuery({
+    queryKey: ["persona-library", "personas", activeOrgId],
+    enabled: Boolean(accessToken && activeOrgId),
+    queryFn: async () => realtimeApi.listPersonas(client, { orgId: activeOrgId, enabledOnly: false }),
+  });
+
+  useEffect(() => {
+    const orgs = organizationOptions;
+    if (!orgs.length) return;
+    if (!orgs.some((org) => org.id === activeOrgId)) {
+      setActiveOrgId(orgs[0].id);
+    }
+  }, [organizationOptions, activeOrgId]);
+
+  const personas: PersonaLibraryItem[] = useMemo(() => {
+    return (personasQuery.data ?? []).map((persona) => ({
+      id: persona.id,
+      slug: persona.slug,
+      name: persona.name,
+      role: persona.role,
+      status: persona.enabled ? "active" : "draft",
+      version: "v1.0",
+      scope: activeOrgId,
+      description: `${persona.role} persona (${persona.slug})`,
+      capabilities: [],
+      guardrails: [],
+      testsPassed: 0,
+      testsFailed: 0,
+      lastUpdated: "-",
+    }));
+  }, [personasQuery.data, activeOrgId]);
 
   const filteredPersonas = personas.filter(
     (persona) =>
@@ -120,7 +153,7 @@ export function Personas() {
       persona.role.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const openTestHarness = (persona: typeof personas[0]) => {
+  const openTestHarness = (persona: PersonaLibraryItem) => {
     setSelectedPersona(persona);
     setTestDialogOpen(true);
   };
@@ -139,8 +172,8 @@ export function Personas() {
         </TabsList>
 
         <TabsContent value="personas" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-[260px] flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
               <Input
                 placeholder="Search personas..."
@@ -149,8 +182,21 @@ export function Personas() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
+            <div className="w-[280px]">
+              <Select value={selectedOrgValue} onValueChange={(value) => setActiveOrgId(value === "__none_org" ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select organization" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none_org">Select organization</SelectItem>
+                  {organizationOptions.map((organization) => (
+                    <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {/* setCreateDialogOpen(true) */}
-            <Button onClick={() => navigate("/create/persona")}>
+            <Button className="ml-auto" onClick={() => navigate("/create/persona")}>
               <Plus className="h-4 w-4 mr-2" />
               Create Persona
             </Button>
@@ -166,7 +212,7 @@ export function Personas() {
                     </div>
                     <div>
                       <h3 className="text-lg font-semibold text-zinc-900">{persona.name}</h3>
-                      <p className="text-sm text-zinc-600">{persona.role}</p>
+                      <p className="text-sm text-zinc-600">{persona.role} · {persona.slug}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -224,8 +270,8 @@ export function Personas() {
                     <span className="font-medium text-zinc-900">{persona.scope}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-zinc-600">Version</span>
-                    <span className="font-medium text-zinc-900">{persona.version}</span>
+                    <span className="text-zinc-600">Persona ID</span>
+                    <span className="font-mono text-xs text-zinc-900">{persona.id}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-zinc-600">Last Updated</span>
@@ -239,7 +285,7 @@ export function Personas() {
                     <span className="text-sm font-medium text-zinc-900">Capabilities</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {persona.capabilities.map((cap) => (
+                    {(persona.capabilities.length > 0 ? persona.capabilities : ["No capabilities metadata yet"]).map((cap) => (
                       <Badge key={cap} variant="outline" className="text-xs">
                         {cap}
                       </Badge>
@@ -253,7 +299,7 @@ export function Personas() {
                     <span className="text-sm font-medium text-zinc-900">Guardrails</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
-                    {persona.guardrails.map((guardrail) => (
+                    {(persona.guardrails.length > 0 ? persona.guardrails : ["No guardrails metadata yet"]).map((guardrail) => (
                       <Badge key={guardrail} variant="secondary" className="text-xs">
                         {guardrail}
                       </Badge>

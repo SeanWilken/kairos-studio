@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangleIcon, HammerIcon, Pencil, PencilRulerIcon, Save, ScanLineIcon, Sparkles, Speech, UserCircle2, Wrench } from "lucide-react";
+import { HammerIcon, PencilRulerIcon, Save, Sparkles, Speech, Upload, UserCircle2 } from "lucide-react";
 import {
-  Alert,
   Button,
   Input,
   Label,
@@ -11,22 +10,20 @@ import {
   SelectTrigger,
   SelectValue,
   Tabs,
-  TabsContent,
   TabsList,
   TabsTrigger,
+  TabsContent,
   Textarea,
   WizardTemplate,
-  ChatWorkspace,
-  type ChatParticipant,
-  type ChatMessage
-} from "@kairosstack/ui";
+  Card,
+  CardHeader,
+  CardTitle,
+  CardContent,
+} from "@myai-tech/myui";
 import { PersonaTraitCard } from "./PersonaTraitCard";
 import { PersonaResumePreview } from "./PersonaResumePreview";
 import { buildPersonaSystemPrompt } from "./prompt";
 import type { PersonaBuilderValues, PersonaTraitOption } from "./types";
-import { PackImportWorkflow } from "./PackImportWorkflow";
-import { createCoreApiClient } from "@/lib/api/client";
-import { getAccessToken } from "@/lib/auth-session";
 
 const traitOptions: PersonaTraitOption[] = [
   { id: "direct", label: "Direct", description: "Straightforward, clear, and honest." },
@@ -40,7 +37,7 @@ const traitOptions: PersonaTraitOption[] = [
   { id: "out_of_sight", label: "Out-of-sight", description: "Stays unobtrusive until needed." },
 ];
 
-const stepDefinitions = [
+const createSteps = [
   { id: "basics", label: "Basics", description: "Identity, scope, organization", icon: UserCircle2 },
   { id: "personality", label: "Personality", description: "Trait selection", icon: Sparkles },
   { id: "communication", label: "Communication", description: "Tone and initiative", icon: Speech },
@@ -49,21 +46,41 @@ const stepDefinitions = [
   { id: "review", label: "Review", description: "Preview and save", icon: Save },
 ];
 
-const mockParticipants: ChatParticipant[] = [
-  { id: "assistant-1", name: "Your Assistant", role: "assistant", avatarColor: "bg-blue-500" },
-  { id: "pm-1", name: "Alex Chen", role: "user", avatarColor: "bg-green-500" },
-  { id: "dev-1", name: "Jordan Kim", role: "user", avatarColor: "bg-purple-500" },
+const importSteps = [
+  { id: "import", label: "Import", description: "Paste payload", icon: Upload },
+  { id: "tune", label: "Tune", description: "Quick adjustments", icon: Sparkles },
+  { id: "review", label: "Review", description: "Preview and create", icon: Save },
 ];
+
+function asObj(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function asString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
 export function PersonaResumeBuilder(props: {
   organizationOptions: Array<{ id: string; name: string }>;
+  providerOptions?: Array<{ id: string; label: string }>;
+  modelOptionsByProvider?: Record<string, Array<{ id: string; label: string }>>;
   initialValues?: Partial<PersonaBuilderValues>;
   onChange?: (values: PersonaBuilderValues, systemPrompt: string) => void;
   onStepChange?: (stepIndex: number) => void;
   onChatTest?: (input: { message: string; values: PersonaBuilderValues; systemPrompt: string }) => Promise<string>;
   onSave: (values: PersonaBuilderValues, systemPrompt: string) => Promise<void> | void;
 }) {
+  const [mode, setMode] = useState<"create" | "import">("create");
   const [step, setStep] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [reviewTab, setReviewTab] = useState("resume");
+  const [chatInput, setChatInput] = useState("Introduce yourself and explain how you can help with a feature rollout.");
+  const [chatIsSending, setChatIsSending] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: "user" | "assistant"; text: string }>>([]);
+  const [importPayloadText, setImportPayloadText] = useState("{}");
+  const [importError, setImportError] = useState("");
+
   const [values, setValues] = useState<PersonaBuilderValues>({
     name: "",
     role: "",
@@ -73,6 +90,8 @@ export function PersonaResumeBuilder(props: {
     orgId: "",
     scope: "organization",
     modelProfile: "reasoning-optimized",
+    runtimeProviderId: "",
+    runtimeModelId: "",
     traits: ["relaxed", "hand_hold"],
     communicationStyle: "balanced",
     initiativeLevel: "medium",
@@ -84,33 +103,12 @@ export function PersonaResumeBuilder(props: {
     systemPromptOverride: "",
     ...props.initialValues,
   });
-  
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const defaultOrgId = env.VITE_KAIROS_ORG_ID ?? "Development";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
-  const [accessToken] = useState(() => getAccessToken());
 
-  const client = useMemo(
-    () =>
-      createCoreApiClient({
-        baseUrl: runtimeBaseUrl,
-        accessToken,
-        scope: { tenantId, orgId: defaultOrgId },
-      }),
-    [runtimeBaseUrl, accessToken, tenantId, defaultOrgId],
-  );
-
-  
-  const currentStep = stepDefinitions[step] ?? stepDefinitions[0];
-  const [activeTab, setActiveTab] = useState("builder");
-
-  const [isSaving, setIsSaving] = useState(false);
-  const [reviewTab, setReviewTab] = useState("resume");
-  const [chatInput, setChatInput] = useState("Introduce yourself and explain how you can help with a feature rollout.");
-  const [chatIsSending, setChatIsSending] = useState(false);
-  const [chatError, setChatError] = useState("");
-  const [chatMessages, setChatMessages] = useState<Array<{ id: string; role: "user" | "assistant"; text: string }>>([]);
+  const steps = mode === "create" ? createSteps : importSteps;
+  const currentStep = steps[step] ?? steps[0];
+  const providerOptions = props.providerOptions ?? [];
+  const modelOptionsByProvider = props.modelOptionsByProvider ?? {};
+  const selectedProviderModels = values.runtimeProviderId ? (modelOptionsByProvider[values.runtimeProviderId] ?? []) : [];
 
   useEffect(() => {
     if (!props.initialValues) return;
@@ -128,29 +126,22 @@ export function PersonaResumeBuilder(props: {
     });
   }, [props.organizationOptions]);
 
+  useEffect(() => {
+    if (!values.runtimeProviderId || !values.runtimeModelId) return;
+    if (selectedProviderModels.some((option) => option.id === values.runtimeModelId)) return;
+    setValues((previous) => ({ ...previous, runtimeModelId: "" }));
+  }, [values.runtimeProviderId, values.runtimeModelId, selectedProviderModels]);
+
+  useEffect(() => {
+    setStep(0);
+  }, [mode]);
+
   const organizationOptions = useMemo(() => {
-    if (!values.orgId || props.organizationOptions.some((option) => option.id === values.orgId)) {
-      return props.organizationOptions;
-    }
-    return [
-      { id: values.orgId, name: `Current org (${values.orgId})` },
-      ...props.organizationOptions,
-    ];
+    if (!values.orgId || props.organizationOptions.some((option) => option.id === values.orgId)) return props.organizationOptions;
+    return [{ id: values.orgId, name: `Current org (${values.orgId})` }, ...props.organizationOptions];
   }, [props.organizationOptions, values.orgId]);
 
   const systemPrompt = useMemo(() => buildPersonaSystemPrompt(values), [values]);
-
-
-  const [selectedThreadId, setSelectedThreadId] = useState("")
-  const [selectedMessage, setSelectedMessage] = useState<ChatMessage | null>(null)
-  
-  function sendMessage(message: string) {
-    console.log(message);
-  }
-
-  function onDraftChange(draft: string) {
-    console.info(draft);
-  }
 
   useEffect(() => {
     props.onChange?.(values, systemPrompt);
@@ -191,25 +182,42 @@ export function PersonaResumeBuilder(props: {
     }
   };
 
+  const loadImportPayload = () => {
+    setImportError("");
+    try {
+      const parsed = asObj(JSON.parse(importPayloadText));
+      const data = asObj(parsed.data);
+      const nextValues: Partial<PersonaBuilderValues> = {
+        name: asString(parsed.name) || asString(data.name),
+        role: asString(parsed.role) || asString(data.role),
+        scope: asString(parsed.scope) || asString(data.scope) || values.scope,
+        modelProfile: asString(parsed.model_profile) || asString(data.model_profile) || values.modelProfile,
+        runtimeProviderId: asString(parsed.runtime_provider_id) || asString(data.runtime_provider_id),
+        runtimeModelId: asString(parsed.runtime_model_id) || asString(data.runtime_model_id),
+        headline: asString(data.headline),
+        summary: asString(data.summary),
+        industry: asString(data.industry) || values.industry,
+        tone: asString(data.tone) || values.tone,
+      };
+      setValues((previous) => ({ ...previous, ...nextValues }));
+      setStep(1);
+    } catch {
+      setImportError("Import payload is not valid JSON.");
+    }
+  };
+
   const sendReviewMessage = async () => {
-    const message = // chatInput ? chatInput.trim() : 
-      "This is a test message to review the persona's communication style and capabilities.";
+    const message = chatInput.trim();
     if (!message) return;
-
-    const userId = `user-${Date.now()}`;
     setChatError("");
-    setChatMessages((previous) => [...previous, { id: userId, role: "user", text: message }]);
+    setChatMessages((previous) => [...previous, { id: `user-${Date.now()}`, role: "user", text: message }]);
     setChatInput("");
-
     setChatIsSending(true);
     try {
       const assistantText = props.onChatTest
         ? await props.onChatTest({ message, values, systemPrompt })
-        : `${values.name || "Assistant"}: I can help. I'll start by clarifying goals, defining rollout stages, and mapping risks before execution.`;
-      setChatMessages((previous) => [
-        ...previous,
-        { id: `assistant-${Date.now()}`, role: "assistant", text: assistantText || "No response received." },
-      ]);
+        : `${values.name || "Assistant"}: I can help.`;
+      setChatMessages((previous) => [...previous, { id: `assistant-${Date.now()}`, role: "assistant", text: assistantText }]);
     } catch (error) {
       setChatError(error instanceof Error ? error.message : "Failed to run chat preview.");
     } finally {
@@ -217,273 +225,163 @@ export function PersonaResumeBuilder(props: {
     }
   };
 
-
-
-
   return (
-    <WizardTemplate
-      title="Persona Resume Builder"
-      description="Design and review a persona before saving"
-      contextText={`Step ${step + 1} of ${stepDefinitions.length}: ${currentStep.label}`}
-      steps={stepDefinitions}
-      currentStepId={currentStep.id}
-      completedStepIds={stepDefinitions.slice(0, step).map((s) => s.id)}
-      canGoBack={step > 0}
-      canGoNext={true}
-      backLabel="Back"
-      nextLabel={step < stepDefinitions.length - 1 ? "Next" : isSaving ? "Saving..." : "Save Persona"}
-      onBack={() => setStep((current) => Math.max(0, current - 1))}
-      onNext={() => {
-        if (step < stepDefinitions.length - 1) {
-          setStep((current) => Math.min(stepDefinitions.length - 1, current + 1));
-          return;
-        }
-        void save();
-      }}
-      className="md:[&>div]:grid-cols-[248px_1fr]"
-      classNames={{
-        root: "min-h-[calc(100vh-12rem)] border-zinc-200 bg-white",
-        rail: "min-h-[calc(100vh-12rem)] bg-zinc-50",
-        railHeader: "px-5 py-5",
-        railNav: "px-3 py-3",
-        panelHeader: "bg-zinc-50/50",
-        panelBody: "py-4",
-      }}
-      contextValues={{
-        Traits: String(values.traits.length),
-        Tools: String(values.tools.length),
-      }}
-    >
-      {step === 0 ? (
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-3">
-          <TabsList>
-            <TabsTrigger value="builder">Resume Builder</TabsTrigger>
-            <TabsTrigger value="import">Import and Review</TabsTrigger>
-            <TabsTrigger value="template">Templates</TabsTrigger>
-          </TabsList>
-
-
-          <TabsContent value="Templates">
-            {/* <PackImportWorkflow client={client} /> */}
-            <div>Templates</div>
-          </TabsContent>
-
-          <TabsContent value="import">
-            <PackImportWorkflow client={client} />
-          </TabsContent>
-
-          <TabsContent value="builder">
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Name</Label>
-                <Input value={values.name} onChange={(event) => setValue("name", event.target.value)} placeholder="Kai" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Role</Label>
-                <Input value={values.role} onChange={(event) => setValue("role", event.target.value)} placeholder="AI Development Assistant" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Organization</Label>
-                <Select
-                  value={values.orgId || undefined}
-                  onValueChange={(value) => setValue("orgId", value)}
-                >
-                  <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
-                  <SelectContent>
-                    {organizationOptions.map((org) => (
-                      <SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Industry</Label>
-                <Input value={values.industry} onChange={(event) => setValue("industry", event.target.value)} />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <Label>Headline</Label>
-                <Input value={values.headline} onChange={(event) => setValue("headline", event.target.value)} placeholder="Your helpful coding partner" />
-              </div>
-              <div className="space-y-1.5 md:col-span-2">
-                <Label>Summary</Label>
-                <Textarea
-                  value={values.summary}
-                  onChange={(event) => setValue("summary", event.target.value)}
-                  className="min-h-[110px]"
-                  placeholder="Resume-style summary used for persona export and editing workflows"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Scope</Label>
-                <Select value={values.scope} onValueChange={(value) => setValue("scope", value)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="organization">organization</SelectItem>
-                    <SelectItem value="team">team</SelectItem>
-                    <SelectItem value="tenant">tenant</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Model profile</Label>
-                <Select value={values.modelProfile} onValueChange={(value) => setValue("modelProfile", value)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="reasoning-optimized">reasoning-optimized</SelectItem>
-                    <SelectItem value="balanced">balanced</SelectItem>
-                    <SelectItem value="fast">fast</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>) : null
-      }
-
-      {step === 1 ? (
-        <div>
-          <p className="mb-2 text-sm text-zinc-600">Select 2-4 traits.</p>
-          <div className="grid gap-2 md:grid-cols-3">
-            {traitOptions.map((option) => (
-              <PersonaTraitCard key={option.id} option={option} selected={values.traits.includes(option.id)} onToggle={toggleTrait} />
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {step === 2 ? (
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label>Communication</Label>
-            <Select value={values.communicationStyle} onValueChange={(value) => setValue("communicationStyle", value)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="concise">concise</SelectItem>
-                <SelectItem value="balanced">balanced</SelectItem>
-                <SelectItem value="detailed">detailed</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Tone</Label>
-            <Select value={values.tone} onValueChange={(value) => setValue("tone", value)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="professional">professional</SelectItem>
-                <SelectItem value="professional_warm">professional_warm</SelectItem>
-                <SelectItem value="conversational">conversational</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Initiative</Label>
-            <Select value={values.initiativeLevel} onValueChange={(value) => setValue("initiativeLevel", value)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">low</SelectItem>
-                <SelectItem value="medium">medium</SelectItem>
-                <SelectItem value="high">high</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      ) : null}
-
-      {step === 3 ? (
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label>Do</Label>
-            <Textarea value={values.doList} onChange={(event) => setValue("doList", event.target.value)} className="min-h-[220px]" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Don't</Label>
-            <Textarea value={values.dontList} onChange={(event) => setValue("dontList", event.target.value)} className="min-h-[220px]" />
-          </div>
-          <div className="space-y-1.5">
-            <Label>Guardrails</Label>
-            <Textarea value={values.guardrails} onChange={(event) => setValue("guardrails", event.target.value)} className="min-h-[220px]" />
-          </div>
-        </div>
-      ) : null}
-
-      {step === 4 ? (
-        <div className="space-y-2">
-          <Label>Tools & Capabilities</Label>
-          <div className="grid gap-2 md:grid-cols-3">
-            {["knowledge_base_query", "web_search", "task_management", "documentation", "email_compose", "calendar"].map((tool) => (
-              <button
-                key={tool}
-                type="button"
-                onClick={() => toggleTool(tool)}
-                className={`rounded border px-3 py-2 text-left text-sm ${values.tools.includes(tool) ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white"}`}
-              >
-                {tool}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {step === 5 ? (
-        <div className="space-y-4">
-          <Tabs value={reviewTab} onValueChange={setReviewTab}>
-            <TabsList>
-              <TabsTrigger value="resume">Resume</TabsTrigger>
-              <TabsTrigger value="chat">Chat Preview</TabsTrigger>
-              <TabsTrigger value="advanced">Advanced</TabsTrigger>
-            </TabsList>
-
-            <TabsContent value="resume" className="mt-3">
-              <PersonaResumePreview values={values} systemPrompt={systemPrompt} />
-            </TabsContent>
-
-            <TabsContent value="chat" className="mt-3 space-y-3">
-              <div className="min-h-[320px] space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">
-                {chatMessages.length === 0 ? (
-                  <p className="text-sm text-zinc-500">No messages yet. Send a quick prompt to test this resume-generated system prompt.</p>
+    <div className="space-y-3">
+      <Tabs value={mode} onValueChange={(value) => setMode(value as "create" | "import")}> 
+        <TabsList>
+          <TabsTrigger value="create">Create</TabsTrigger>
+          <TabsTrigger value="import">Import</TabsTrigger>
+          {/* <TabsTrigger value="installed">Installed</TabsTrigger> */}
+        </TabsList>
+        {/* <TabsContent value="installed">
+          <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Installed persona list</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2"> */}
+                {/* {personaItems.length === 0 ? (
+                  <p className="text-sm text-zinc-500">No personas found for selected org.</p>
                 ) : (
-                  chatMessages.map((message) => (
-                    <div
-                      key={message.id}
-                      className={message.role === "user"
-                        ? "ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-zinc-900 px-3 py-2 text-sm text-white"
-                        : "max-w-[85%] rounded-2xl rounded-bl-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 whitespace-pre-wrap"}
+                  personaItems.map((persona) => (
+                    <button
+                      key={persona.persona_id}
+                      type="button"
+                      onClick={() => setSelectedPersonaId(persona.persona_id)}
+                      className={`w-full rounded border px-3 py-2 text-left text-xs ${selectedPersonaId === persona.persona_id ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white"}`}
                     >
-                      {message.text}
-                    </div>
+                      <p className="font-medium">{persona.name}</p>
+                      <p className="opacity-75">{persona.persona_id}</p>
+                      <div className="mt-1 flex gap-1">
+                        <Badge variant="outline" className="text-[10px]">{persona.approval_status ?? "unknown"}</Badge>
+                        <Badge variant="outline" className="text-[10px]">{persona.model_profile ?? "default"}</Badge>
+                      </div>
+                    </button>
                   ))
-                )}
-              </div>
-              {chatError ? <p className="text-sm text-red-600">{chatError}</p> : null}
-              <div className="space-y-2">
-                <Textarea
-                  value={chatInput}
-                  onChange={(event) => setChatInput(event.target.value)}
-                  className="min-h-[96px]"
-                  placeholder="Ask a quick question to validate this persona"
-                />
-                <div className="flex justify-end">
-                  <Button type="button" onClick={() => void sendReviewMessage()} disabled={chatIsSending || !chatInput.trim()}>
-                    {chatIsSending ? "Sending..." : "Send message"}
-                  </Button>
-                </div>
-              </div>
-            </TabsContent>
+                )} */}
+              {/* </CardContent>
+            </Card>
 
-            <TabsContent value="advanced" className="mt-3 space-y-3">
-              <div>
-                <p className="mb-1 text-sm font-medium text-zinc-700">Generated prompt</p>
-                <pre className="max-h-72 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-xs whitespace-pre-wrap">{systemPrompt || "No prompt generated yet."}</pre>
-              </div>
-              <div>
-                <p className="mb-1 text-sm font-medium text-zinc-700">Draft payload</p>
-                <pre className="max-h-72 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-xs">{JSON.stringify(values, null, 2)}</pre>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
-      ) : null}
-    </WizardTemplate>
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Persona detail + export resume</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3"> */}
+                {/* {!selectedPersonaId ? (
+                  <p className="text-sm text-zinc-500">Select a persona to load /v1/studio/personas and export-resume.</p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <Badge variant="secondary">{selectedPersonaId}</Badge>
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => void Promise.all([personaDetailQuery.refetch(), personaResumeQuery.refetch()])}>
+                          Refresh
+                        </Button>
+                        <Button type="button" size="sm" onClick={prefillFromSelectedPersona}>
+                          Prefill Builder
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-zinc-600">GET /v1/studio/personas/{"{persona_id}"}</p>
+                      <pre className="max-h-52 overflow-auto rounded bg-zinc-50 p-2 text-[11px] text-zinc-700">
+                        {JSON.stringify(personaDetailQuery.data ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-zinc-600">GET /v1/studio/personas/{"{persona_id}"}/export-resume</p>
+                      <pre className="max-h-52 overflow-auto rounded bg-zinc-50 p-2 text-[11px] text-zinc-700">
+                        {JSON.stringify(personaResumeQuery.data ?? {}, null, 2)}
+                      </pre>
+                    </div>
+                  </>
+                )} */}
+              {/* </CardContent>
+            </Card>
+          </div>
+        </TabsContent> */}
+      </Tabs>
+
+      <WizardTemplate
+        title={mode === "create" ? "Persona Resume Builder" : "Persona Import Builder"}
+        description={mode === "create" ? "Design and review a persona before saving" : "Import an existing persona payload and tune before creating"}
+        contextText={`Step ${step + 1} of ${steps.length}: ${currentStep.label}`}
+        steps={steps}
+        currentStepId={currentStep.id}
+        completedStepIds={steps.slice(0, step).map((s) => s.id)}
+        canGoBack={step > 0}
+        canGoNext={true}
+        backLabel="Back"
+        nextLabel={step < steps.length - 1 ? "Next" : isSaving ? "Saving..." : mode === "import" ? "Create From Import" : "Save Persona"}
+        onBack={() => setStep((current) => Math.max(0, current - 1))}
+        onNext={() => {
+          if (step < steps.length - 1) {
+            setStep((current) => Math.min(steps.length - 1, current + 1));
+            return;
+          }
+          void save();
+        }}
+        className="md:[&>div]:grid-cols-[248px_1fr]"
+        classNames={{ root: "min-h-[calc(100vh-12rem)] border-zinc-200 bg-white", rail: "min-h-[calc(100vh-12rem)] bg-zinc-50", railHeader: "px-5 py-5", railNav: "px-3 py-3", panelHeader: "bg-zinc-50/50", panelBody: "py-4" }}
+        contextValues={{ Traits: String(values.traits.length), Tools: String(values.tools.length) }}
+      >
+        
+        {mode === "create" && step === 0 ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5"><Label>Name</Label><Input value={values.name} onChange={(event) => setValue("name", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Role</Label><Input value={values.role} onChange={(event) => setValue("role", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Organization</Label><Select value={values.orgId || undefined} onValueChange={(value) => setValue("orgId", value)}><SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger><SelectContent>{organizationOptions.map((org) => (<SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Industry</Label><Input value={values.industry} onChange={(event) => setValue("industry", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Model profile</Label><Select value={values.modelProfile} onValueChange={(value) => setValue("modelProfile", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reasoning-optimized">reasoning-optimized</SelectItem><SelectItem value="balanced">balanced</SelectItem><SelectItem value="fast">fast</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Runtime provider</Label><Select value={values.runtimeProviderId || "__none_provider"} onValueChange={(value) => setValue("runtimeProviderId", value === "__none_provider" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use gateway default" /></SelectTrigger><SelectContent><SelectItem value="__none_provider">Use gateway default</SelectItem>{providerOptions.map((provider) => (<SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Runtime model</Label><Select value={values.runtimeModelId || "__none_model"} onValueChange={(value) => setValue("runtimeModelId", value === "__none_model" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use provider default" /></SelectTrigger><SelectContent><SelectItem value="__none_model">Use provider default</SelectItem>{selectedProviderModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5 md:col-span-2"><Label>Headline</Label><Input value={values.headline} onChange={(event) => setValue("headline", event.target.value)} /></div>
+            <div className="space-y-1.5 md:col-span-2"><Label>Summary</Label><Textarea value={values.summary} onChange={(event) => setValue("summary", event.target.value)} className="min-h-[110px]" /></div>
+          </div>
+        ) : null}
+
+        {mode === "create" && step === 1 ? <div><p className="mb-2 text-sm text-zinc-600">Select 2-4 traits.</p><div className="grid gap-2 md:grid-cols-3">{traitOptions.map((option) => (<PersonaTraitCard key={option.id} option={option} selected={values.traits.includes(option.id)} onToggle={toggleTrait} />))}</div></div> : null}
+        {mode === "create" && step === 2 ? <div className="grid gap-3 md:grid-cols-3"><div className="space-y-1.5"><Label>Communication</Label><Select value={values.communicationStyle} onValueChange={(value) => setValue("communicationStyle", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="concise">concise</SelectItem><SelectItem value="balanced">balanced</SelectItem><SelectItem value="detailed">detailed</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>Tone</Label><Select value={values.tone} onValueChange={(value) => setValue("tone", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="professional">professional</SelectItem><SelectItem value="professional_warm">professional_warm</SelectItem><SelectItem value="conversational">conversational</SelectItem></SelectContent></Select></div><div className="space-y-1.5"><Label>Initiative</Label><Select value={values.initiativeLevel} onValueChange={(value) => setValue("initiativeLevel", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">low</SelectItem><SelectItem value="medium">medium</SelectItem><SelectItem value="high">high</SelectItem></SelectContent></Select></div></div> : null}
+        {mode === "create" && step === 3 ? <div className="grid gap-3 md:grid-cols-3"><div className="space-y-1.5"><Label>Do</Label><Textarea value={values.doList} onChange={(event) => setValue("doList", event.target.value)} className="min-h-[220px]" /></div><div className="space-y-1.5"><Label>Don't</Label><Textarea value={values.dontList} onChange={(event) => setValue("dontList", event.target.value)} className="min-h-[220px]" /></div><div className="space-y-1.5"><Label>Guardrails</Label><Textarea value={values.guardrails} onChange={(event) => setValue("guardrails", event.target.value)} className="min-h-[220px]" /></div></div> : null}
+        {mode === "create" && step === 4 ? <div className="space-y-2"><Label>Tools & Capabilities</Label><div className="grid gap-2 md:grid-cols-3">{["knowledge_base_query", "web_search", "task_management", "documentation", "email_compose", "calendar"].map((tool) => (<button key={tool} type="button" onClick={() => toggleTool(tool)} className={`rounded border px-3 py-2 text-left text-sm ${values.tools.includes(tool) ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-white"}`}>{tool}</button>))}</div></div> : null}
+
+        {mode === "import" && step === 0 ? (
+          <div className="space-y-3">
+            <Label>Import payload (JSON)</Label>
+            <Textarea value={importPayloadText} onChange={(event) => setImportPayloadText(event.target.value)} className="min-h-[240px] font-mono text-xs" />
+            {importError ? <p className="text-xs text-red-600">{importError}</p> : null}
+            <div className="flex justify-end"><Button type="button" variant="outline" onClick={loadImportPayload}>Load imported values</Button></div>
+          </div>
+        ) : null}
+
+        {mode === "import" && step === 1 ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="space-y-1.5"><Label>Name</Label><Input value={values.name} onChange={(event) => setValue("name", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Role</Label><Input value={values.role} onChange={(event) => setValue("role", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Model profile</Label><Select value={values.modelProfile} onValueChange={(value) => setValue("modelProfile", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reasoning-optimized">reasoning-optimized</SelectItem><SelectItem value="balanced">balanced</SelectItem><SelectItem value="fast">fast</SelectItem></SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Runtime provider</Label><Select value={values.runtimeProviderId || "__none_provider"} onValueChange={(value) => setValue("runtimeProviderId", value === "__none_provider" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use gateway default" /></SelectTrigger><SelectContent><SelectItem value="__none_provider">Use gateway default</SelectItem>{providerOptions.map((provider) => (<SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Runtime model</Label><Select value={values.runtimeModelId || "__none_model"} onValueChange={(value) => setValue("runtimeModelId", value === "__none_model" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use provider default" /></SelectTrigger><SelectContent><SelectItem value="__none_model">Use provider default</SelectItem>{selectedProviderModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Tone</Label><Select value={values.tone} onValueChange={(value) => setValue("tone", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="professional">professional</SelectItem><SelectItem value="professional_warm">professional_warm</SelectItem><SelectItem value="conversational">conversational</SelectItem></SelectContent></Select></div>
+          </div>
+        ) : null}
+
+        {((mode === "create" && step === 5) || (mode === "import" && step === 2)) ? (
+          <div className="space-y-4">
+            <Tabs value={reviewTab} onValueChange={setReviewTab}>
+              <TabsList><TabsTrigger value="resume">Resume</TabsTrigger><TabsTrigger value="chat">Chat Preview</TabsTrigger><TabsTrigger value="advanced">Advanced</TabsTrigger></TabsList>
+              <TabsContent value="resume" className="mt-3"><PersonaResumePreview values={values} systemPrompt={systemPrompt} /></TabsContent>
+              <TabsContent value="chat" className="mt-3 space-y-3">
+                <p className="text-xs text-zinc-500">Chat uses saved persona defaults. Runtime provider/model overrides are applied via persona save.</p>
+                <div className="min-h-[320px] space-y-2 rounded-lg border border-zinc-200 bg-zinc-50 p-3">{chatMessages.length === 0 ? <p className="text-sm text-zinc-500">No messages yet.</p> : chatMessages.map((message) => (<div key={message.id} className={message.role === "user" ? "ml-auto max-w-[85%] rounded-2xl rounded-br-md bg-zinc-900 px-3 py-2 text-sm text-white" : "max-w-[85%] rounded-2xl rounded-bl-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 whitespace-pre-wrap"}>{message.text}</div>))}</div>
+                {chatError ? <p className="text-sm text-red-600">{chatError}</p> : null}
+                <Textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} className="min-h-[96px]" placeholder="Ask a quick question" />
+                <div className="flex justify-end"><Button type="button" onClick={() => void sendReviewMessage()} disabled={chatIsSending || !chatInput.trim()}>{chatIsSending ? "Sending..." : "Send message"}</Button></div>
+              </TabsContent>
+              <TabsContent value="advanced" className="mt-3 space-y-3"><div><p className="mb-1 text-sm font-medium text-zinc-700">Generated prompt</p><pre className="max-h-72 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-xs whitespace-pre-wrap">{systemPrompt || "No prompt generated yet."}</pre></div><div><p className="mb-1 text-sm font-medium text-zinc-700">Draft payload</p><pre className="max-h-72 overflow-auto rounded border border-zinc-200 bg-zinc-50 p-3 text-xs">{JSON.stringify(values, null, 2)}</pre></div></TabsContent>
+            </Tabs>
+          </div>
+        ) : null}
+      </WizardTemplate>
+    </div>
   );
 }

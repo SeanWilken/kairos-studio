@@ -9,6 +9,7 @@ import { LoginPage } from "./app/components/pages/Login";
 import { NotFoundPage } from "./app/components/pages/NotFound";
 import { Workflows } from "./app/components/pages/Workflows";
 import { Knowledge } from "./app/components/pages/Knowledge";
+import GraphExplorer from "./app/components/pages/Knowledger";
 import { Audit } from "./app/components/pages/Audit";
 import { RealtimeLabPage } from "./app/components/pages/RealtimeLab";
 import { CreateOrganizationPage, CreateTeamPage, CreateUserPage } from "./app/components/pages/create/CreateRecordsPage";
@@ -43,6 +44,7 @@ export const router = createBrowserRouter([
           { path: "*", Component: Organization },
         ]
       },
+      { path: "knowledger", Component: GraphExplorer },
       { path: "personas", Component: Personas },
       { path: "tools", Component: Tools },
       { path: "workflows", Component: Workflows },

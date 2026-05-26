@@ -1,6 +1,6 @@
-import { ArrowRight, Beaker, Building2, ShieldCheck, Users, UserPlus } from "lucide-react";
+import { ArrowRight, Building2, ShieldCheck, Users, UserPlus } from "lucide-react";
 import { Link } from "react-router";
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@kairosstack/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@myai-tech/myui";
 
 const createOptions = [
   {
@@ -30,13 +30,6 @@ const createOptions = [
     href: "/create/persona",
     icon: ShieldCheck,
     status: "Agent",
-  },
-  {
-    title: "Create Persona (OLD)",
-    description: "Legacy persona studio flow kept for reference while we validate the new wizard.",
-    href: "/create/persona-ab",
-    icon: Beaker,
-    status: "Legacy",
   },
 ];
 

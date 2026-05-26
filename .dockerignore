@@ -1,0 +1,12 @@
+node_modules
+dist
+.git
+.gitignore
+.husky
+.github
+*.log
+coverage
+tmp
+temp
+Dockerfile*
+docker-compose*.yml

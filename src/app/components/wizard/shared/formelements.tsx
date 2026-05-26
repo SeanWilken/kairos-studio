@@ -12,7 +12,7 @@ import {
   Switch,
   Textarea,
   cn,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 import { ArrowRight, CheckCheck, CheckCircle2, ChevronRight, Circle } from "lucide-react";
 
 export type FieldType =

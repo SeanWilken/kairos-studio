@@ -55,7 +55,7 @@ import {
   TableHeader,
   TableRow,
   Switch,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 
 type ToolCategory = "email" | "api" | "database" | "filesystem" | "calendar" | "custom";
 type ToolStatus = "active" | "pending_approval";

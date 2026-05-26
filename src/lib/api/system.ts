@@ -25,10 +25,33 @@ export type RuntimeChecksRunPayload = {
   check_ids?: string[];
 };
 
+export type AiProvider = {
+  provider_id: string;
+  name?: string;
+  status?: string;
+  enabled?: boolean;
+  [key: string]: unknown;
+};
+
+export type AiProviderModel = {
+  model_id: string;
+  name?: string;
+  capability?: string;
+  [key: string]: unknown;
+};
+
 export const systemApi = {
   getStatus: (client: CoreApiClient, sessionId: string) =>
     client.get<RuntimeStatus>("/v1/system/status", { session_id: sessionId }),
 
   runChecks: (client: CoreApiClient, payload: RuntimeChecksRunPayload) =>
     client.post<RuntimeStatus>("/v1/system/checks/run", payload),
+
+  listAiProviders: (client: CoreApiClient) =>
+    client.get<{ items?: AiProvider[] } | { providers?: AiProvider[] }>("/v1/system/ai/providers"),
+
+  listAiProviderModels: (client: CoreApiClient, providerId: string, options?: { capability?: string }) =>
+    client.get<{ items?: AiProviderModel[] } | { models?: AiProviderModel[] }>(`/v1/system/ai/providers/${providerId}/models`, {
+      capability: options?.capability,
+    }),
 };

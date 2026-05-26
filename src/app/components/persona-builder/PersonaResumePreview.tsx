@@ -1,4 +1,4 @@
-import { Badge, Card, CardContent, CardHeader, CardTitle } from "@kairosstack/ui";
+import { Badge, Card, CardContent, CardHeader, CardTitle } from "@myai-tech/myui";
 import type { PersonaBuilderValues } from "./types";
 
 export function PersonaResumePreview(props: {

@@ -1,14 +1,15 @@
 import { Navigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@kairosstack/ui";
+import { Card, CardContent, CardHeader, CardTitle } from "@myai-tech/myui";
 import { bootstrapApi, createCoreApiClient, healthApi, studioApi } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";
 import { WorkspaceHome } from "./WorkspaceHome";
+import { getRuntimeConfig } from "../../../config/runtime"
 
 export function FirstRunLanding() {
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
   const accessToken = getAccessToken();
 
   const gateQuery = useQuery({

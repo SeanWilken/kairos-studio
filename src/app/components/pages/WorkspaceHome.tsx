@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -16,13 +16,13 @@ import {
   Wrench,
   Radio,
 } from "lucide-react";
-import { Button, Progress } from "@kairosstack/ui";
+import { Button, Progress } from "@myai-tech/myui";
 import { bootstrapApi, createCoreApiClient, healthApi, studioApi, systemApi } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";
 import { getCreateQueueState, subscribeCreateQueue } from "../../../lib/create-request-queue";
 import { buildWorkspaceNotifications, type WorkspaceHealthLevel } from "../../../lib/workspace-notifications";
 import { getWorkspaceScope, subscribeWorkspaceScope, type WorkspaceScope } from "../../../lib/workspace-scope";
-
+import { getRuntimeConfig } from "../../../config/runtime"
 type HealthItem = {
   key: string;
   label: string;
@@ -37,9 +37,13 @@ type SetupStep = {
   timestamp?: string;
 };
 
-const CORE_FRONTEND_URL = (import.meta.env.VITE_KAIROS_CORE_FRONTEND_URL as string | undefined) ?? "";
-const COUNCIL_FRONTEND_URL = (import.meta.env.VITE_KAIROS_COUNCIL_FRONTEND_URL as string | undefined) ?? "";
-const EXPLICIT_WS_URL = (import.meta.env.VITE_KAIROS_CORE_WS_URL as string | undefined) ?? "";
+const CORE_FRONTEND_URL = (import.meta.env.VITE_MYAI_CORE_FRONTEND_URL as string | undefined) ?? "";
+const COUNCIL_FRONTEND_URL = (import.meta.env.VITE_MYAI_COUNCIL_FRONTEND_URL as string | undefined) ?? "";
+
+const runtimeConfig = getRuntimeConfig();
+const tenantId = runtimeConfig.tenantId;
+const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+const EXPLICIT_WS_URL = runtimeConfig.coreWsUrl ?? "";
 
 function normalizeList<T>(value: unknown): T[] {
   if (Array.isArray((value as { items?: unknown })?.items)) {
@@ -129,9 +133,8 @@ const quickActions = [
 
 export function WorkspaceHome() {
   const navigate = useNavigate();
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const [searchParams] = useSearchParams();
+  const setupRef = useRef<HTMLDivElement | null>(null);
   const accessToken = getAccessToken();
 
   const [queueState, setQueueState] = useState(() => getCreateQueueState());
@@ -211,7 +214,12 @@ export function WorkspaceHome() {
           key: "providers",
           label: "Provider Connectivity",
           level: checkLevel(checks, "provider_connectivity"),
-          message: checkLevel(checks, "provider_connectivity") === "healthy" ? "Reachable" : "Not ready",
+          message:
+            checkLevel(checks, "provider_connectivity") === "healthy"
+              ? "Reachable"
+              : checkLevel(checks, "provider_connectivity") === "unknown"
+                ? "No runtime check data"
+                : "Not ready",
         },
         {
           key: "frontend-core",
@@ -314,6 +322,11 @@ export function WorkspaceHome() {
   const progressPercent = totalSteps > 0 ? (completedSteps / totalSteps) * 100 : 0;
   const setupComplete = Boolean(totalSteps > 0 && completedSteps === totalSteps);
 
+  useEffect(() => {
+    if (searchParams.get("focus") !== "setup") return;
+    setupRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [searchParams]);
+
   return (
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
@@ -322,7 +335,7 @@ export function WorkspaceHome() {
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <div className="rounded-lg border bg-white p-6">
+        <div ref={setupRef} className="rounded-lg border bg-white p-6">
           <div className="mb-4 flex items-start justify-between">
             <div>
               <h2 className="text-lg font-semibold text-zinc-900">Core Status</h2>

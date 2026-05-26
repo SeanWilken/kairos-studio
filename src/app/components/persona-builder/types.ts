@@ -13,6 +13,8 @@ export type PersonaBuilderValues = {
   orgId: string;
   scope: string;
   modelProfile: string;
+  runtimeProviderId: string;
+  runtimeModelId: string;
   traits: string[];
   communicationStyle: string;
   initiativeLevel: string;

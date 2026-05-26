@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Bell,
   Building2,
@@ -10,6 +10,8 @@ import {
   FileText,
   Radio,
   LayoutDashboard,
+  PanelLeftClose,
+  PanelLeftOpen,
   LogOut,
   PlusCircle,
   Settings,
@@ -27,10 +29,11 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@kairosstack/ui";
+} from "@myai-tech/myui";
 import { authApi, bootstrapApi, createCoreApiClient, healthApi, studioApi } from "../../../lib/api";
-import { clearAuthSession, getAccessToken } from "../../../lib/auth-session";
+import { clearAuthSession, getAccessToken, saveAuthSession, subscribeAuthSession } from "../../../lib/auth-session";
 import { getCreateQueueState, setCreateQueuePaused, subscribeCreateQueue } from "../../../lib/create-request-queue";
+import { queryClient } from "../../../lib/query-client";
 import { buildWorkspaceNotifications, type WorkspaceHealthLevel } from "../../../lib/workspace-notifications";
 import {
   getWorkspaceScope,
@@ -54,6 +57,8 @@ const navigation = [
   { name: "Realtime", href: "/realtime", icon: Radio },
 ];
 
+const SIDEBAR_COLLAPSED_KEY = "kairos.studio.nav.collapsed";
+
 function normalizeList<T>(value: unknown): T[] {
   if (Array.isArray((value as { items?: unknown })?.items)) {
     return ((value as { items: T[] }).items ?? []) as T[];
@@ -70,17 +75,23 @@ function statusChip(level: WorkspaceHealthLevel): { label: string; className: st
 export function KairosShell() {
   const navigate = useNavigate();
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
-  const accessToken = getAccessToken();
+  const tenantId = env.VITE_MYAI_TENANT_ID ?? "tenant-local";
+  const runtimeBaseUrl = env.VITE_MYAI_CORE_API_BASE_URL;
+  const [accessToken, setAccessToken] = useState(() => getAccessToken());
 
   const [queuePaused, setQueuePausedState] = useState(() => getCreateQueueState().paused);
   const [scope, setScope] = useState<WorkspaceScope>(() => getWorkspaceScope(tenantId));
   const [teams, setTeams] = useState<TeamRecord[]>(() => readWorkspaceTeams());
+  const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true");
 
   useEffect(() => subscribeCreateQueue((next) => setQueuePausedState(next.paused)), []);
   useEffect(() => subscribeWorkspaceScope(setScope, tenantId), [tenantId]);
   useEffect(() => subscribeWorkspaceTeams(setTeams), []);
+  useEffect(() => subscribeAuthSession(() => setAccessToken(getAccessToken())), []);
+
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, navCollapsed ? "true" : "false");
+  }, [navCollapsed]);
 
   const scopeOrgId = scope.type === "organization" ? scope.id : scope.type === "team" ? scope.orgId : undefined;
 
@@ -139,9 +150,32 @@ export function KairosShell() {
     retry: false,
   });
 
+  const switchOrgMutation = useMutation({
+    mutationFn: async (organization: { id: string; name: string }) => {
+      const response = await authApi.switchContext(client, { org_id: organization.id });
+      const tokenSet = response as { access_token?: string; refresh_token?: string; expires_in?: number };
+      if (!tokenSet.access_token || !tokenSet.refresh_token) {
+        throw new Error("Context switch succeeded but token payload was missing.");
+      }
+      saveAuthSession({
+        accessToken: tokenSet.access_token,
+        refreshToken: tokenSet.refresh_token,
+        accessTokenExpiresAt: typeof tokenSet.expires_in === "number" ? Date.now() + tokenSet.expires_in * 1000 : undefined,
+      });
+      setWorkspaceScope({ type: "organization", id: organization.id, name: organization.name });
+      queryClient.clear();
+    },
+  });
+
   const status = statusChip(workspaceQuery.data?.healthLevel ?? "unknown");
   const notifications = workspaceQuery.data?.notifications ?? [];
-  const organizations = workspaceQuery.data?.organizations ?? [];
+  const organizationsFromWorkspace = workspaceQuery.data?.organizations ?? [];
+  const organizationsFromMe = Array.isArray(meQuery.data?.org_options)
+    ? meQuery.data.org_options
+        .filter((option): option is { org_id: string; name?: string } => typeof option?.org_id === "string")
+        .map((option) => ({ id: option.org_id, name: option.name ?? option.org_id }))
+    : [];
+  const organizations = organizationsFromMe.length > 0 ? organizationsFromMe : organizationsFromWorkspace;
 
   const workspaceLabel =
     scope.type === "tenant"
@@ -154,14 +188,14 @@ export function KairosShell() {
     <div className="flex h-screen flex-col bg-zinc-50">
       <header className="flex h-16 flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-6">
         <div className="flex items-center gap-6">
-          <h1 className="text-xl font-bold text-zinc-900">Kairos Studio</h1>
+          <h1 className="text-xl font-bold text-zinc-900">myAI Studio</h1>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 shadow-xs transition-colors hover:bg-zinc-50"
-              >
+               <button
+                 type="button"
+                 className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-900 shadow-xs transition-colors hover:bg-zinc-50"
+               >
                 <Building2 className="h-4 w-4" />
                 {workspaceLabel}
                 <ChevronDown className="h-4 w-4" />
@@ -176,7 +210,10 @@ export function KairosShell() {
               {organizations.map((organization) => (
                 <DropdownMenuItem
                   key={`org-${organization.id}`}
-                  onSelect={() => setWorkspaceScope({ type: "organization", id: organization.id, name: organization.name })}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    void switchOrgMutation.mutateAsync(organization);
+                  }}
                 >
                   <Building2 className="mr-2 h-4 w-4" />
                   Org: {organization.name}
@@ -279,21 +316,32 @@ export function KairosShell() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        <aside className="w-64 flex-shrink-0 overflow-y-auto border-r border-zinc-200 bg-white">
+        <aside className={`${navCollapsed ? "w-16" : "w-64"} flex-shrink-0 overflow-y-auto border-r border-zinc-200 bg-white transition-all`}>
           <nav className="space-y-1 p-4">
+            <div className={`mb-2 flex ${navCollapsed ? "justify-center" : "justify-end"}`}>
+              <Button
+                variant="outline"
+                size="icon"
+                aria-label={navCollapsed ? "Expand navigation" : "Collapse navigation"}
+                onClick={() => setNavCollapsed((current) => !current)}
+              >
+                {navCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              </Button>
+            </div>
             {navigation.map((item) => (
               <NavLink
                 key={item.name}
                 to={item.href}
                 end={item.href === "/"}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  `flex items-center ${navCollapsed ? "justify-center" : "gap-3"} rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
                     isActive ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-100 hover:text-zinc-900"
                   }`
                 }
+                title={item.name}
               >
                 <item.icon className="h-5 w-5 flex-shrink-0" />
-                <span>{item.name}</span>
+                {navCollapsed ? null : <span>{item.name}</span>}
               </NavLink>
             ))}
           </nav>

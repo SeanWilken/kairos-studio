@@ -1,0 +1,15 @@
+services:
+  myai-studio:
+    image: ${MYAI_STUDIO_IMAGE:-docker.io/myaitech/myai-studio-frontend:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    networks:
+      - myai-stack_default
+    restart: unless-stopped
+
+networks:
+  myai-stack_default:
+    external: true

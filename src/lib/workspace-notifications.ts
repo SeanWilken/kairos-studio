@@ -70,7 +70,7 @@ export function buildWorkspaceNotifications(input: {
       level: "info",
       title: "Setup is not complete",
       detail: `${input.setupIncompleteCount} setup step(s) still pending.`,
-      href: "/",
+      href: "/?focus=setup",
       actionLabel: "View Progress",
     });
   }

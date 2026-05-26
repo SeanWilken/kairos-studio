@@ -57,11 +57,25 @@ export type StudioPersona = {
   scope?: string;
   enabled?: boolean;
   model_profile?: string;
+  runtime_provider_id?: string | null;
+  runtime_model_id?: string | null;
   system_prompt?: string;
   data?: Record<string, unknown>;
   approval_status?: string;
   created_at?: string;
   updated_at?: string;
+};
+
+export type StudioPersonaVersion = {
+  version_id: string;
+  persona_id?: string;
+  version_number?: string;
+  created_at?: string;
+  change_summary?: string;
+  runtime_provider_id?: string | null;
+  runtime_model_id?: string | null;
+  model_profile?: string | null;
+  [key: string]: unknown;
 };
 
 export type StudioOrganizationCreatePayload = {
@@ -109,6 +123,8 @@ export type StudioPersonaCreatePayload = {
   scope?: string;
   enabled?: boolean;
   model_profile?: string;
+  runtime_provider_id?: string | null;
+  runtime_model_id?: string | null;
   system_prompt?: string;
   data?: Record<string, unknown>;
 };
@@ -137,6 +153,10 @@ export type StudioChannelChatPayload = {
   persona_id?: string;
   mode?: string;
   [key: string]: unknown;
+};
+
+export type StudioChannelListResponse = {
+  items: StudioChannel[];
 };
 
 export const studioApi = {
@@ -184,8 +204,22 @@ export const studioApi = {
   exportPersonaResume: (client: CoreApiClient, personaId: string) =>
     client.get<Record<string, unknown>>(`/v1/studio/personas/${personaId}/export-resume`),
 
+  listPersonaVersions: (client: CoreApiClient, personaId: string) =>
+    client.get<{ items: StudioPersonaVersion[] }>(`/v1/studio/personas/${personaId}/versions`),
+
+  getPersonaVersion: (client: CoreApiClient, personaId: string, versionId: string) =>
+    client.get<StudioPersonaVersion>(`/v1/studio/personas/${personaId}/versions/${versionId}`),
+
+  rollbackPersonaVersion: (client: CoreApiClient, personaId: string, versionId: string) =>
+    client.post<Record<string, unknown>>(`/v1/studio/personas/${personaId}/rollback/${versionId}`),
+
   createChannel: (client: CoreApiClient, payload: StudioChannelCreatePayload) =>
     client.post<StudioChannel>("/v1/studio/channels", payload),
+
+  listChannels: (client: CoreApiClient, options?: { orgId?: string }) =>
+    client.get<StudioChannelListResponse>("/v1/studio/channels", {
+      org_id: options?.orgId,
+    }),
 
   chatInChannel: (client: CoreApiClient, channelId: string, payload: StudioChannelChatPayload) =>
     client.post<Record<string, unknown>>(`/v1/studio/channels/${channelId}/chat`, payload),

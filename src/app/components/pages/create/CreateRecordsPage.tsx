@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, useNavigate } from "react-router";
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogHeader, DialogTitle } from "@kairosstack/ui";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogHeader, DialogTitle } from "@myai-tech/myui";
 import {
   FormWizard,
   createAgentPersonaCreationWizardFormProps,
@@ -24,6 +24,7 @@ import {
   subscribeCreateQueue,
   type CreateQueueJob,
 } from "../../../../lib/create-request-queue";
+import { getRuntimeConfig } from "../../../../config/runtime";
 
 type OnboardingRecord = {
   id: string;
@@ -88,10 +89,10 @@ function buildHierarchy(orgs: Array<{ id: string; name: string }>, users: Array<
 
 export function CreateRecordsPage({ variant }: { variant: WizardVariant }) {
   const navigate = useNavigate();
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const defaultOrgId = env.VITE_KAIROS_ORG_ID ?? "8a56c7f2-5506-46a3-ae3a-f8dfa36548e2";
-  const runtimeBaseUrl = env.VITE_KAIROS_CORE_API_BASE_URL;
+  const runtimeConfig = getRuntimeConfig();
+  const tenantId = runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const defaultOrgId = runtimeConfig.orgId ?? "org-local";
   const [accessToken, setAccessToken] = useState(() => getAccessToken());
   const [tenantBootstrapError, setTenantBootstrapError] = useState<string | null>(null);
   const [isBootstrappingTenant, setIsBootstrappingTenant] = useState(false);

@@ -4,6 +4,8 @@ import { motion } from "motion/react";
 import { Bot, Sparkles } from "lucide-react";
 import { authApi, createCoreApiClient } from "../../../lib/api";
 import { saveAuthSession } from "../../../lib/auth-session";
+import { setWorkspaceScope } from "../../../lib/workspace-scope";
+import { getRuntimeConfig } from "../../../config/runtime"
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -13,9 +15,10 @@ export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_KAIROS_TENANT_ID ?? "tenant-local";
-  const orgId = env.VITE_KAIROS_ORG_ID ?? "8a56c7f2-5506-46a3-ae3a-f8dfa36548e2";
+  const runtimeConfig = getRuntimeConfig();
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const tenantId = runtimeConfig.tenantId;
+  const orgId = runtimeConfig.orgId;
   const bootstrapStatus = searchParams.get("bootstrap");
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -32,7 +35,7 @@ export function LoginPage() {
         org_id: orgId || undefined,
       });
 
-      const tokenSet = loginResult as { access_token?: string; refresh_token?: string };
+      const tokenSet = loginResult as { access_token?: string; refresh_token?: string; expires_in?: number };
       if (!tokenSet.access_token || !tokenSet.refresh_token) {
         throw new Error("Login succeeded but token payload was missing.");
       }
@@ -40,7 +43,23 @@ export function LoginPage() {
       saveAuthSession({
         accessToken: tokenSet.access_token,
         refreshToken: tokenSet.refresh_token,
+        accessTokenExpiresAt: typeof tokenSet.expires_in === "number" ? Date.now() + tokenSet.expires_in * 1000 : undefined,
       });
+
+      const meClient = createCoreApiClient({
+        baseUrl: runtimeBaseUrl,
+        accessToken: tokenSet.access_token,
+        scope: { tenantId, orgId: orgId || undefined },
+      });
+      const me = await authApi.me(meClient);
+      const orgOptions = Array.isArray(me.org_options) ? me.org_options : [];
+      const selectedOrg = orgOptions.find((option) => typeof option.org_id === "string") as { org_id?: string; name?: string } | undefined;
+
+      if (selectedOrg?.org_id) {
+        setWorkspaceScope({ type: "organization", id: selectedOrg.org_id, name: selectedOrg.name ?? selectedOrg.org_id });
+      } else {
+        setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
+      }
 
       setIsLoading(false);
       navigate("/");
