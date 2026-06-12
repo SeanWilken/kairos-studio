@@ -188,7 +188,8 @@ export function Organization() {
   const users = usersQuery.data ?? [];
   const selectedOrgValue = organizations.some((organization) => organization.id === selectedOrgId)
     ? selectedOrgId
-    : "__none_org";
+    : undefined;
+  const selectedOrgLabel = organizations.find((organization) => organization.id === selectedOrgValue)?.name;
 
   useEffect(() => {
     if (!organizations.length) return;
@@ -450,10 +451,9 @@ export function Organization() {
             <CardContent className="space-y-4">
               <div className="max-w-sm">
                 <Label>Organization</Label>
-                <Select value={selectedOrgValue} onValueChange={(value) => setSelectedOrgId(value === "__none_org" ? "" : value)}>
-                  <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
+                <Select value={selectedOrgValue} onValueChange={setSelectedOrgId}>
+                  <SelectTrigger><span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__none_org">Select organization</SelectItem>
                     {organizations.map((organization) => (
                       <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
                     ))}
@@ -543,7 +543,7 @@ export function Organization() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5"><Label>Organization</Label><Select value={selectedOrgValue} onValueChange={(value) => setSelectedOrgId(value === "__none_org" ? "" : value)}><SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger><SelectContent><SelectItem value="__none_org">Select organization</SelectItem>{organizations.map((organization) => (<SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>))}</SelectContent></Select></div>
+                <div className="space-y-1.5"><Label>Organization</Label><Select value={selectedOrgValue} onValueChange={setSelectedOrgId}><SelectTrigger><span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span></SelectTrigger><SelectContent>{organizations.map((organization) => (<SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>))}</SelectContent></Select></div>
                 <div className="space-y-1.5"><Label>Principal ID</Label><Input value={explainPrincipalId} onChange={(event) => setExplainPrincipalId(event.target.value)} placeholder="user or agent id" /></div>
                 <div className="space-y-1.5"><Label>Principal kind</Label><Select value={explainPrincipalKind} onValueChange={(value) => setExplainPrincipalKind(value as "user" | "agent")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="user">user</SelectItem><SelectItem value="agent">agent</SelectItem></SelectContent></Select></div>
                 <div className="space-y-1.5"><Label>Lens</Label><Input value={explainLens} onChange={(event) => setExplainLens(event.target.value)} placeholder="knowledge.resolve" /></div>

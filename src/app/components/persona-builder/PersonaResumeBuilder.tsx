@@ -60,6 +60,20 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function asMultilineString(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .join("\n");
+  }
+  return asString(value);
+}
+
 export function PersonaResumeBuilder(props: {
   organizationOptions: Array<{ id: string; name: string }>;
   providerOptions?: Array<{ id: string; label: string }>;
@@ -141,6 +155,11 @@ export function PersonaResumeBuilder(props: {
     return [{ id: values.orgId, name: `Current org (${values.orgId})` }, ...props.organizationOptions];
   }, [props.organizationOptions, values.orgId]);
 
+  const selectedOrganizationLabel = useMemo(() => {
+    if (!values.orgId) return "";
+    return organizationOptions.find((option) => option.id === values.orgId)?.name ?? values.orgId;
+  }, [organizationOptions, values.orgId]);
+
   const systemPrompt = useMemo(() => buildPersonaSystemPrompt(values), [values]);
 
   useEffect(() => {
@@ -187,17 +206,65 @@ export function PersonaResumeBuilder(props: {
     try {
       const parsed = asObj(JSON.parse(importPayloadText));
       const data = asObj(parsed.data);
+      const personality = asObj(parsed.personality);
+      const operationalPolicies = asObj(parsed.operational_policies);
+      const promptBlocks = asObj(parsed.prompt_blocks);
+      const personaName = asString(parsed.persona_name);
+      const personaRole = asString(parsed.persona_role);
+      const personaScope = asString(parsed.persona_scope);
+      const personaModelProfile = asString(parsed.persona_model_profile);
+      const personaOrgId = asString(parsed.persona_org_id) || asString(parsed.org_id);
       const nextValues: Partial<PersonaBuilderValues> = {
-        name: asString(parsed.name) || asString(data.name),
-        role: asString(parsed.role) || asString(data.role),
-        scope: asString(parsed.scope) || asString(data.scope) || values.scope,
-        modelProfile: asString(parsed.model_profile) || asString(data.model_profile) || values.modelProfile,
+        name: personaName || asString(parsed.name) || asString(data.name),
+        role: personaRole || asString(parsed.role) || asString(data.role),
+        orgId: personaOrgId || values.orgId,
+        scope: personaScope || asString(parsed.scope) || asString(data.scope) || values.scope,
+        modelProfile: personaModelProfile || asString(parsed.model_profile) || asString(data.model_profile) || values.modelProfile,
         runtimeProviderId: asString(parsed.runtime_provider_id) || asString(data.runtime_provider_id),
         runtimeModelId: asString(parsed.runtime_model_id) || asString(data.runtime_model_id),
         headline: asString(data.headline),
         summary: asString(data.summary),
         industry: asString(data.industry) || values.industry,
-        tone: asString(data.tone) || values.tone,
+        tone: asString(parsed.persona_tone) || asString(data.tone) || values.tone,
+        communicationStyle:
+          asString(parsed.persona_communication_style) ||
+          asString(personality.communication_style) ||
+          asString(data.communication_style) ||
+          values.communicationStyle,
+        initiativeLevel:
+          asString(parsed.persona_initiative_level) ||
+          asString(personality.initiative_level) ||
+          asString(data.initiative_level) ||
+          values.initiativeLevel,
+        traits:
+          asStringArray(parsed.persona_traits).length > 0
+            ? asStringArray(parsed.persona_traits)
+            : asStringArray(personality.traits).length > 0
+              ? asStringArray(personality.traits)
+              : values.traits,
+        doList:
+          asMultilineString(parsed.persona_do_list) ||
+          asMultilineString(personality.do_list) ||
+          values.doList,
+        dontList:
+          asMultilineString(parsed.persona_dont_list) ||
+          asMultilineString(personality.dont_list) ||
+          values.dontList,
+        guardrails:
+          asMultilineString(parsed.persona_guardrails) ||
+          asMultilineString(promptBlocks.guardrails) ||
+          values.guardrails,
+        tools:
+          asStringArray(parsed.persona_tools).length > 0
+            ? asStringArray(parsed.persona_tools)
+            : asStringArray(data.tools).length > 0
+              ? asStringArray(data.tools)
+              : values.tools,
+        systemPromptOverride:
+          asString(parsed.system_prompt) ||
+          asString(parsed.persona_system_prompt) ||
+          asString(parsed.instructions) ||
+          asString(promptBlocks.instructions),
       };
       setValues((previous) => ({ ...previous, ...nextValues }));
       setStep(1);
@@ -226,7 +293,7 @@ export function PersonaResumeBuilder(props: {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex h-full min-h-0 flex-col space-y-3">
       <Tabs value={mode} onValueChange={(value) => setMode(value as "create" | "import")}> 
         <TabsList>
           <TabsTrigger value="create">Create</TabsTrigger>
@@ -321,8 +388,8 @@ export function PersonaResumeBuilder(props: {
           }
           void save();
         }}
-        className="md:[&>div]:grid-cols-[248px_1fr]"
-        classNames={{ root: "min-h-[calc(100vh-12rem)] border-zinc-200 bg-white", rail: "min-h-[calc(100vh-12rem)] bg-zinc-50", railHeader: "px-5 py-5", railNav: "px-3 py-3", panelHeader: "bg-zinc-50/50", panelBody: "py-4" }}
+        className="flex-1 min-h-0 [&>div]:h-full [&>div]:min-h-0 md:[&>div]:grid-cols-[248px_1fr]"
+        classNames={{ root: "h-full min-h-0 border-zinc-200 bg-white", rail: "h-full min-h-0 bg-zinc-50", panel: "min-h-0", railHeader: "px-5 py-5", railNav: "px-3 py-3", panelHeader: "bg-zinc-50/50", panelBody: "min-h-0 py-4", panelFooter: "shrink-0" }}
         contextValues={{ Traits: String(values.traits.length), Tools: String(values.tools.length) }}
       >
         
@@ -330,7 +397,7 @@ export function PersonaResumeBuilder(props: {
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Name</Label><Input value={values.name} onChange={(event) => setValue("name", event.target.value)} /></div>
             <div className="space-y-1.5"><Label>Role</Label><Input value={values.role} onChange={(event) => setValue("role", event.target.value)} /></div>
-            <div className="space-y-1.5"><Label>Organization</Label><Select value={values.orgId || undefined} onValueChange={(value) => setValue("orgId", value)}><SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger><SelectContent>{organizationOptions.map((org) => (<SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>))}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Organization</Label><Select value={values.orgId || undefined} onValueChange={(value) => setValue("orgId", value)}><SelectTrigger><span className={selectedOrganizationLabel ? "" : "text-zinc-500"}>{selectedOrganizationLabel || "Select organization"}</span></SelectTrigger><SelectContent>{organizationOptions.map((org) => (<SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-1.5"><Label>Industry</Label><Input value={values.industry} onChange={(event) => setValue("industry", event.target.value)} /></div>
             <div className="space-y-1.5"><Label>Model profile</Label><Select value={values.modelProfile} onValueChange={(value) => setValue("modelProfile", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reasoning-optimized">reasoning-optimized</SelectItem><SelectItem value="balanced">balanced</SelectItem><SelectItem value="fast">fast</SelectItem></SelectContent></Select></div>
             <div className="space-y-1.5"><Label>Runtime provider</Label><Select value={values.runtimeProviderId || "__none_provider"} onValueChange={(value) => setValue("runtimeProviderId", value === "__none_provider" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use gateway default" /></SelectTrigger><SelectContent><SelectItem value="__none_provider">Use gateway default</SelectItem>{providerOptions.map((provider) => (<SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>))}</SelectContent></Select></div>
@@ -358,6 +425,7 @@ export function PersonaResumeBuilder(props: {
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Name</Label><Input value={values.name} onChange={(event) => setValue("name", event.target.value)} /></div>
             <div className="space-y-1.5"><Label>Role</Label><Input value={values.role} onChange={(event) => setValue("role", event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Organization</Label><Select value={values.orgId || undefined} onValueChange={(value) => setValue("orgId", value)}><SelectTrigger><span className={selectedOrganizationLabel ? "" : "text-zinc-500"}>{selectedOrganizationLabel || "Select organization"}</span></SelectTrigger><SelectContent>{organizationOptions.map((org) => (<SelectItem key={org.id} value={org.id}>{org.name}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-1.5"><Label>Model profile</Label><Select value={values.modelProfile} onValueChange={(value) => setValue("modelProfile", value)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reasoning-optimized">reasoning-optimized</SelectItem><SelectItem value="balanced">balanced</SelectItem><SelectItem value="fast">fast</SelectItem></SelectContent></Select></div>
             <div className="space-y-1.5"><Label>Runtime provider</Label><Select value={values.runtimeProviderId || "__none_provider"} onValueChange={(value) => setValue("runtimeProviderId", value === "__none_provider" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use gateway default" /></SelectTrigger><SelectContent><SelectItem value="__none_provider">Use gateway default</SelectItem>{providerOptions.map((provider) => (<SelectItem key={provider.id} value={provider.id}>{provider.label}</SelectItem>))}</SelectContent></Select></div>
             <div className="space-y-1.5"><Label>Runtime model</Label><Select value={values.runtimeModelId || "__none_model"} onValueChange={(value) => setValue("runtimeModelId", value === "__none_model" ? "" : value)}><SelectTrigger><SelectValue placeholder="Use provider default" /></SelectTrigger><SelectContent><SelectItem value="__none_model">Use provider default</SelectItem>{selectedProviderModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.label}</SelectItem>))}</SelectContent></Select></div>

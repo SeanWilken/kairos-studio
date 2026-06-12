@@ -152,9 +152,10 @@ export function CreatePersonaStudioPage() {
         },
       });
     },
-    onSuccess: async (created) => {
+    onSuccess: async (created, variables) => {
       setSaveError("");
-      setSaveSuccess(`Saved persona ${created.name}.`);
+      const personaLabel = variables.values.name.trim() || created.name || created.persona_id || "persona";
+      setSaveSuccess(`Saved persona ${personaLabel}.`);
       setSelectedPersonaId(created.persona_id);
       await personasQuery.refetch();
     },

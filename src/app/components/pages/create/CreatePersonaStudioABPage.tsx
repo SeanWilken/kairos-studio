@@ -1,12 +1,14 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router";
 import { Alert, AlertDescription, AlertTitle } from "@myai-tech/myui";
 import { PersonaResumeBuilder } from "../../persona-builder/PersonaResumeBuilder";
 import { slugify } from "../../persona-builder/prompt";
 import type { PersonaBuilderValues } from "../../persona-builder/types";
-import { createCoreApiClient, studioApi, systemApi } from "../../../../lib/api";
+import { authApi, createCoreApiClient, studioApi, systemApi } from "../../../../lib/api";
 import { getAccessToken } from "../../../../lib/auth-session";
 import { getRuntimeConfig } from "../../../../config/runtime";
+import { getWorkspaceScope, subscribeWorkspaceScope } from "../../../../lib/workspace-scope";
 
 function extractAssistantText(payload: Record<string, unknown> | null): string {
   if (!payload) return "";
@@ -40,26 +42,36 @@ function pickNullableString(source: Record<string, unknown> | null | undefined, 
 }
 
 export function CreatePersonaStudioABPage() {
+  const [searchParams] = useSearchParams();
 
   const runtimeConfig = getRuntimeConfig();
   const tenantId = runtimeConfig.tenantId;
   const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
   const defaultOrgId = runtimeConfig.orgId ?? "org-local";
   const [accessToken] = useState(() => getAccessToken());
+  const [workspaceScope, setWorkspaceScopeState] = useState(() => getWorkspaceScope(tenantId));
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
   const [channelId, setChannelId] = useState("");
   const [personaId, setPersonaId] = useState("");
   const [selectedVersionId, setSelectedVersionId] = useState("");
 
+  useEffect(() => subscribeWorkspaceScope(setWorkspaceScopeState, tenantId), [tenantId]);
+
+  const workspaceOrgId = workspaceScope.type === "organization"
+    ? workspaceScope.id
+    : workspaceScope.type === "team"
+      ? (workspaceScope.orgId ?? "")
+      : "";
+
   const client = useMemo(
     () =>
       createCoreApiClient({
         baseUrl: runtimeBaseUrl,
         accessToken,
-        scope: { tenantId, orgId: defaultOrgId },
+        scope: { tenantId, orgId: workspaceOrgId || defaultOrgId },
       }),
-    [runtimeBaseUrl, accessToken, tenantId, defaultOrgId],
+    [runtimeBaseUrl, accessToken, tenantId, workspaceOrgId, defaultOrgId],
   );
 
   const organizationsQuery = useQuery({
@@ -67,10 +79,25 @@ export function CreatePersonaStudioABPage() {
     enabled: Boolean(accessToken),
     queryFn: async () => {
       const response = await studioApi.listOrganizations(client);
-      return Array.isArray((response as { items?: unknown[] }).items)
-        ? ((response as { items: Array<{ id: string; name: string }> }).items ?? [])
+      const items = Array.isArray((response as { items?: unknown[] }).items)
+        ? ((response as { items?: unknown[] }).items ?? [])
         : [];
+      return items
+        .map((item) => {
+          const record = item && typeof item === "object" ? (item as Record<string, unknown>) : null;
+          const id = typeof record?.id === "string" ? record.id : typeof record?.org_id === "string" ? record.org_id : "";
+          const name = typeof record?.name === "string" ? record.name : id;
+          return id ? { id, name } : null;
+        })
+        .filter((item): item is { id: string; name: string } => Boolean(item));
     },
+  });
+
+  const meQuery = useQuery({
+    queryKey: ["persona-ab", "me", tenantId],
+    enabled: Boolean(accessToken),
+    queryFn: async () => authApi.me(client),
+    retry: false,
   });
 
   const providersQuery = useQuery({
@@ -127,12 +154,71 @@ export function CreatePersonaStudioABPage() {
     queryFn: async () => studioApi.getPersona(client, personaId),
   });
 
-  const organizationOptions = (organizationsQuery.data ?? []).map((organization) => ({
-    id: organization.id,
-    name: organization.name,
-  }));
-  const activeOrgId = organizationsQuery.data?.[0]?.id ?? defaultOrgId;
-  const builderInitialValues = useMemo(() => ({ orgId: activeOrgId }), [activeOrgId]);
+  const organizationOptions = useMemo(() => {
+    const fromMe = Array.isArray(meQuery.data?.org_options)
+      ? meQuery.data.org_options
+          .filter((option): option is { org_id: string; name?: string } => typeof option?.org_id === "string")
+          .map((option) => ({ id: option.org_id, name: option.name ?? option.org_id }))
+      : [];
+    if (fromMe.length > 0) return fromMe;
+    return organizationsQuery.data ?? [];
+  }, [meQuery.data, organizationsQuery.data]);
+  const activeOrgId = workspaceOrgId || organizationOptions[0]?.id || defaultOrgId;
+  const templateKey = searchParams.get("template") ?? "";
+
+  const builderInitialValues = useMemo(() => {
+    const base = { orgId: activeOrgId } as Partial<PersonaBuilderValues>;
+
+    if (templateKey === "code-assistant") {
+      return {
+        ...base,
+        name: "Code Assistant",
+        role: "Engineering Assistant",
+        headline: "Code review, implementation guidance, and debugging support",
+        summary: "Helps engineering teams ship safely with actionable code recommendations.",
+        industry: "software_development",
+        communicationStyle: "precise",
+        initiativeLevel: "high",
+        tone: "professional",
+        traits: ["methodical", "analytical", "direct"],
+        tools: ["documentation", "knowledge_base_query", "task_management", "web_search"],
+      };
+    }
+
+    if (templateKey === "customer-support") {
+      return {
+        ...base,
+        name: "Customer Support Assistant",
+        role: "Support Specialist",
+        headline: "Customer support triage and resolution guidance",
+        summary: "Provides calm, empathetic responses and routes complex issues correctly.",
+        industry: "service",
+        communicationStyle: "conversational",
+        initiativeLevel: "medium",
+        tone: "friendly",
+        traits: ["empathetic", "patient", "relaxed"],
+        tools: ["knowledge_base_query", "task_management", "documentation"],
+      };
+    }
+
+    if (templateKey === "data-analyst") {
+      return {
+        ...base,
+        name: "Data Analyst Assistant",
+        role: "Analyst",
+        headline: "Data analysis and insight generation",
+        summary: "Transforms data inputs into concise findings and clear next actions.",
+        industry: "analytics",
+        communicationStyle: "precise",
+        initiativeLevel: "medium",
+        tone: "professional",
+        traits: ["analytical", "methodical", "direct"],
+        tools: ["documentation", "knowledge_base_query", "task_management"],
+      };
+    }
+
+    return base;
+  }, [activeOrgId, templateKey]);
 
   const createPersonaMutation = useMutation({
     mutationFn: async ({ values, systemPrompt }: { values: PersonaBuilderValues; systemPrompt: string }) => {
@@ -164,9 +250,10 @@ export function CreatePersonaStudioABPage() {
         },
       });
     },
-    onSuccess: (created) => {
+    onSuccess: (created, variables) => {
       setSaveError("");
-      setSaveSuccess(`Saved persona ${created.name}.`);
+      const personaLabel = variables.values.name.trim() || created.name || created.persona_id || "persona";
+      setSaveSuccess(`Saved persona ${personaLabel}.`);
       setPersonaId(created.persona_id);
       setSelectedVersionId("");
     },
@@ -270,7 +357,7 @@ export function CreatePersonaStudioABPage() {
   ];
 
   return (
-    <div className="h-full p-6">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden p-6">
       <div className="mb-4">
         <h1 className="text-2xl font-semibold text-zinc-900">Persona Studio</h1>
         <p className="text-sm text-zinc-600">Wizard-based persona builder with resume review, chat preview, and advanced metadata.</p>
@@ -279,16 +366,18 @@ export function CreatePersonaStudioABPage() {
       {saveError ? <Alert className="mb-3 border-red-200 bg-red-50"><AlertTitle>Save error</AlertTitle><AlertDescription>{saveError}</AlertDescription></Alert> : null}
       {saveSuccess ? <Alert className="mb-3 border-emerald-200 bg-emerald-50"><AlertTitle>Persona saved</AlertTitle><AlertDescription>{saveSuccess}</AlertDescription></Alert> : null}
 
-      <PersonaResumeBuilder
-        organizationOptions={organizationOptions}
-        providerOptions={providersQuery.data ?? []}
-        modelOptionsByProvider={modelsByProviderQuery.data ?? {}}
-        initialValues={builderInitialValues}
-        onChatTest={handleChatTest}
-        onSave={async (values, systemPrompt) => {
-          await createPersonaMutation.mutateAsync({ values, systemPrompt });
-        }}
-      />
+      <div className="min-h-0 flex-1 overflow-hidden">
+        <PersonaResumeBuilder
+          organizationOptions={organizationOptions}
+          providerOptions={providersQuery.data ?? []}
+          modelOptionsByProvider={modelsByProviderQuery.data ?? {}}
+          initialValues={builderInitialValues}
+          onChatTest={handleChatTest}
+          onSave={async (values, systemPrompt) => {
+            await createPersonaMutation.mutateAsync({ values, systemPrompt });
+          }}
+        />
+      </div>
 
       {personaId ? (
         <div className="mt-4 rounded-lg border border-zinc-200 bg-white p-4">

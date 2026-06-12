@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { motion } from "motion/react";
-import { Bot, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { authApi, createCoreApiClient } from "../../../lib/api";
 import { saveAuthSession } from "../../../lib/auth-session";
 import { setWorkspaceScope } from "../../../lib/workspace-scope";
@@ -80,10 +80,10 @@ export function LoginPage() {
             transition={{ duration: 0.6 }}
             className="text-center"
           >
-            <div className="w-24 h-24 rounded-2xl bg-primary-foreground/10 backdrop-blur-sm flex items-center justify-center mx-auto mb-6">
-              <Bot className="w-12 h-12 text-primary-foreground" />
+            <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-2xl bg-primary-foreground/10 p-4 backdrop-blur-sm">
+              <img src="/myAI.svg" alt="myAI" className="h-full w-full object-contain" />
             </div>
-            <h1 className="text-4xl text-primary-foreground mb-4">Studio</h1>
+            <h1 className="text-4xl text-primary-foreground mb-4">myAI Studio</h1>
             <p className="text-xl text-primary-foreground/80 max-w-md mx-auto">
               Manage users, workspaces, and AI resources all in one place. Get started by signing in to your account.
             </p>
@@ -106,7 +106,7 @@ export function LoginPage() {
           <div className="mb-8">
             <h2 className="mb-2">Welcome back</h2>
             <p className="text-muted-foreground">
-              Sign in to access Kairos Studio
+              Sign in to access myAI Studio
             </p>
             {bootstrapStatus === "complete" ? (
               <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">

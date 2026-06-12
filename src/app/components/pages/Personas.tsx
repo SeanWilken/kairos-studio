@@ -77,7 +77,6 @@ export function Personas() {
   const [accessToken] = useState(() => getAccessToken());
   const [searchTerm, setSearchTerm] = useState("");
   const [activeOrgId, setActiveOrgId] = useState(defaultOrgId);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [testDialogOpen, setTestDialogOpen] = useState(false);
   const [selectedPersona, setSelectedPersona] = useState<PersonaLibraryItem | null>(null);
 
@@ -113,7 +112,8 @@ export function Personas() {
 
   const selectedOrgValue = organizationOptions.some((organization) => organization.id === activeOrgId)
     ? activeOrgId
-    : "__none_org";
+    : undefined;
+  const selectedOrgLabel = organizationOptions.find((organization) => organization.id === selectedOrgValue)?.name;
 
   const personasQuery = useQuery({
     queryKey: ["persona-library", "personas", activeOrgId],
@@ -183,12 +183,11 @@ export function Personas() {
               />
             </div>
             <div className="w-[280px]">
-              <Select value={selectedOrgValue} onValueChange={(value) => setActiveOrgId(value === "__none_org" ? "" : value)}>
+              <Select value={selectedOrgValue} onValueChange={setActiveOrgId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select organization" />
+                  <span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none_org">Select organization</SelectItem>
                   {organizationOptions.map((organization) => (
                     <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
                   ))}
@@ -333,14 +332,29 @@ export function Personas() {
             <h3 className="text-lg font-semibold text-zinc-900 mb-4">Persona Templates</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               {[
-                { name: "Customer Support", icon: MessageSquare, description: "Handle customer inquiries and support tickets" },
-                { name: "Data Analyst", icon: Users, description: "Analyze data and generate insights" },
-                { name: "Code Assistant", icon: Shield, description: "Help with code review and suggestions" },
+                {
+                  key: "customer-support",
+                  name: "Customer Support",
+                  icon: MessageSquare,
+                  description: "Handle customer inquiries and support tickets",
+                },
+                {
+                  key: "data-analyst",
+                  name: "Data Analyst",
+                  icon: Users,
+                  description: "Analyze data and generate insights",
+                },
+                {
+                  key: "code-assistant",
+                  name: "Code Assistant",
+                  icon: Shield,
+                  description: "Help with code review and suggestions",
+                },
               ].map((template) => (
                 <button
                   key={template.name}
                   className="border rounded-lg p-6 text-left hover:border-zinc-400 hover:shadow-sm transition-all"
-                  onClick={() => setCreateDialogOpen(true)}
+                  onClick={() => navigate(`/create/persona?template=${encodeURIComponent(template.key)}`)}
                 >
                   <div className="w-12 h-12 rounded-lg bg-blue-50 flex items-center justify-center mb-3">
                     <template.icon className="h-6 w-6 text-blue-600" />
@@ -353,61 +367,6 @@ export function Personas() {
           </div>
         </TabsContent>
       </Tabs>
-
-      {/* Create Persona Dialog */}
-      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Create New Persona</DialogTitle>
-            <DialogDescription>
-              Define a new agent persona with capabilities and guardrails.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="persona-name">Persona Name</Label>
-                <Input id="persona-name" placeholder="e.g., Customer Support Agent" />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="persona-role">Role</Label>
-                <Input id="persona-role" placeholder="e.g., Support Specialist" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="persona-description">Description</Label>
-              <Textarea id="persona-description" placeholder="Describe what this persona does..." rows={3} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="persona-scope">Scope</Label>
-              <Select>
-                <SelectTrigger id="persona-scope">
-                  <SelectValue placeholder="Select scope" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="engineering">Engineering</SelectItem>
-                  <SelectItem value="support">Support Division</SelectItem>
-                  <SelectItem value="sales">Sales Division</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="persona-prompt">Prompt Seed</Label>
-              <Textarea
-                id="persona-prompt"
-                placeholder="Enter the system prompt for this persona..."
-                rows={4}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={() => setCreateDialogOpen(false)}>Create Persona</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Test Harness Dialog */}
       <Dialog open={testDialogOpen} onOpenChange={setTestDialogOpen}>

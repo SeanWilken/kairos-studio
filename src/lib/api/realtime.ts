@@ -36,6 +36,7 @@ export const realtimeApi = {
     options: { orgId: string; enabledOnly?: boolean; search?: string },
   ): Promise<RealtimePersonaOption[]> => {
     let merged: Record<string, unknown>[] = [];
+    let studioRequestFailed = false;
     try {
       const studioResponse = await studioApi.listPersonas(client, {
         orgId: options.orgId,
@@ -43,10 +44,11 @@ export const realtimeApi = {
       });
       merged = normalizeItems<Record<string, unknown>>(studioResponse);
     } catch {
+      studioRequestFailed = true;
       merged = [];
     }
 
-    if (merged.length === 0) {
+    if (studioRequestFailed) {
       try {
         const realtimeResponse = await client.get<{ items?: Array<Record<string, unknown>> }>("/v1/realtime/personas", {
           org_id: options.orgId,
@@ -125,14 +127,16 @@ export const realtimeApi = {
 
   listRooms: async (client: CoreApiClient, options: { orgId?: string }): Promise<RealtimeRoomOption[]> => {
     let merged: Record<string, unknown>[] = [];
+    let studioRequestFailed = false;
     try {
       const channelResponse = await studioApi.listChannels(client, { orgId: options.orgId });
       merged = normalizeItems<Record<string, unknown>>(channelResponse);
     } catch {
+      studioRequestFailed = true;
       merged = [];
     }
 
-    if (merged.length === 0) {
+    if (studioRequestFailed) {
       try {
         const roomsResponse = await client.get<{ items?: Array<Record<string, unknown>> }>("/v1/realtime/rooms", {
           org_id: options.orgId,

@@ -188,7 +188,10 @@ export function KairosShell() {
     <div className="flex h-screen flex-col bg-zinc-50">
       <header className="flex h-16 flex-shrink-0 items-center justify-between border-b border-zinc-200 bg-white px-6">
         <div className="flex items-center gap-6">
-          <h1 className="text-xl font-bold text-zinc-900">myAI Studio</h1>
+          <div className="flex items-center gap-2 text-xl font-bold text-zinc-900">
+            <img src="/myAI.svg" alt="myAI" className="h-7 w-7 shrink-0" />
+            <span>Studio</span>
+          </div>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
