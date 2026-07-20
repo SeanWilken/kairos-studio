@@ -11,7 +11,6 @@ import {
   mapUserRecordToMembershipRequest,
 } from "./mappers";
 import { readWorkspaceTeams, writeWorkspaceTeams } from "../../../../../lib/workspace-scope";
-import { getRuntimeConfig } from "../../../../../config/runtime";
 
 export type WizardVariant =
   | "organization_create"
@@ -677,11 +676,6 @@ export function createProvisioningWizardFormProps(options: {
 }
 
 export function FormWizard(formProps: FormProps) {
-  const runtimeConfig = getRuntimeConfig();
-  const tenantId = runtimeConfig.tenantId;
-  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
-  const defaultOrgId = runtimeConfig.orgId ?? "org-local";
-
   return (
     
     <div className="h-full">

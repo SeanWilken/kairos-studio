@@ -32,13 +32,10 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
-  Label,
-  Textarea,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from "@myai-tech/myui";
 import { authApi, createCoreApiClient, realtimeApi, studioApi } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";

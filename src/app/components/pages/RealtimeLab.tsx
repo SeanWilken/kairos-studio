@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, PanelRightClose, PanelRightOpen, PlugZap, Send, Unplug } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, ChatWorkspace, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea, type ChatMessage, type ChatThreadItem, type ChatThreadParticipant } from "@myai-tech/myui";
+import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, ChatWorkspace, Input, Label, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea, type ChatMessage, type ChatThreadParticipant } from "@myai-tech/myui";
 import { getAccessToken } from "../../../lib/auth-session";
 import { authApi, buildRealtimeWsUrl, connectRealtimeWs, createCoreApiClient, parseRealtimeIncoming, realtimeApi, studioApi } from "../../../lib/api";
 import { getRuntimeConfig } from "../../../config/runtime"
@@ -11,35 +11,6 @@ const participants: ChatThreadParticipant[] = [
   { id: "dev-1", name: "Jordan Kim", avatarColor: "#4338ca" },
   { id: "qa-1", name: "Riley Brooks", avatarColor: "#b45309" },
   { id: "design-1", name: "Morgan Diaz", avatarColor: "#be185d" },
-];
-
-const threads: ChatThreadItem[] = [
-  {
-    id: "room-1",
-    name: "Sprint Planning Council",
-    type: "room",
-    participantIds: ["pm-1", "dev-1", "qa-1", "design-1"],
-    lastMessage: "Ship bulk edits as MVP this sprint behind rollout controls",
-    lastMessageTime: new Date("2026-04-26T09:12:00"),
-    unreadCount: 2,
-    isPinned: true,
-  },
-  {
-    id: "assistant-1",
-    name: "Your Assistant",
-    type: "assistant",
-    participantIds: ["pm-1"],
-    lastMessage: "I can draft the rollout checklist from this thread.",
-    lastMessageTime: new Date("2026-04-26T08:41:00"),
-  },
-  {
-    id: "direct-1",
-    name: "Alex Chen",
-    type: "direct",
-    participantIds: ["pm-1"],
-    lastMessage: "Can you review the release checklist?",
-    lastMessageTime: new Date("2026-04-25T15:20:00"),
-  },
 ];
 
 type SocketEvent = {
@@ -200,12 +171,13 @@ export function RealtimeLabPage() {
         },
         onMessage: (event) => {
           const parsed = parseRealtimeIncoming(event.data);
-          if (parsed.message) {
+          const message = parsed.message;
+          if (message) {
             setMessages((previous) => previous.concat([{
-              id: parsed.message.id,
+              id: message.id,
               role: "assistant",
-              participantId: parsed.message.participantId,
-              content: parsed.message.content,
+              participantId: message.participantId,
+              content: message.content,
               timestamp: new Date,
             }]));
           }
@@ -412,7 +384,7 @@ export function RealtimeLabPage() {
                 subtitle: "Testing the UI Library",
                 participants: participants,
                 messages: messages,
-                onMessageSelect: ((message: ChatMessage) => {}),
+                onMessageSelect: (() => {}),
                 placeholder: "Type message",
                 sendLabel: "Send",
                 draft: draftMessage,

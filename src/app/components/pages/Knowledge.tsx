@@ -30,7 +30,7 @@ import {
   TabsTrigger,
   Textarea,
 } from "@myai-tech/myui";
-import { createCoreApiClient, governanceApi, knowledgeApi, studioApi, type KnowledgeDocument } from "../../../lib/api";
+import { createCoreApiClient, governanceApi, knowledgeApi, studioApi, type KnowledgeDocument, type StudioOrganization } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";
 import { getRuntimeConfig } from "../../../config/runtime"
 
@@ -76,7 +76,7 @@ export function Knowledge() {
   const organizationsQuery = useQuery({
     queryKey: ["knowledge", "organizations", tenantId],
     enabled: Boolean(accessToken),
-    queryFn: async () => normalizeItems(await studioApi.listOrganizations(client)),
+    queryFn: async () => normalizeItems<StudioOrganization>(await studioApi.listOrganizations(client)),
   });
 
   useEffect(() => {

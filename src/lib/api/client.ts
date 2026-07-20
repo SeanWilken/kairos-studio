@@ -8,6 +8,26 @@ export type ApiScope = {
 
 type QueryValue = string | number | boolean | null | undefined;
 
+type CoreApiRequestOptions = {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  body?: unknown;
+  query?: Record<string, QueryValue>;
+  skipAuthRetry?: boolean;
+};
+
+export type CoreApiClient = {
+  request: <T>(path: string, options?: CoreApiRequestOptions) => Promise<T>;
+  baseUrl: string;
+  scope: ApiScope;
+  accessToken: string;
+  get: <T>(path: string, query?: Record<string, QueryValue>) => Promise<T>;
+  post: <T>(path: string, body?: unknown) => Promise<T>;
+  put: <T>(path: string, body?: unknown) => Promise<T>;
+  patch: <T>(path: string, body?: unknown) => Promise<T>;
+  delete: <T>(path: string, body?: unknown) => Promise<T>;
+  withScope: (scope: ApiScope) => CoreApiClient;
+};
+
 type Envelope<T> = {
   data?: T | null;
   error?: {
@@ -59,7 +79,7 @@ export function createCoreApiClient(config?: {
   baseUrl?: string;
   scope?: ApiScope;
   accessToken?: string;
-}) {
+}): CoreApiClient {
   const defaults = getDefaultApiConfig();
   const rawBaseUrl = (config?.baseUrl ?? defaults.baseUrl).replace(/\/$/, "");
   const baseUrl = /^https?:\/\//i.test(rawBaseUrl)
@@ -120,12 +140,7 @@ export function createCoreApiClient(config?: {
 
   const request = async <T>(
     path: string,
-    options?: {
-      method?: "GET" | "POST" | "PATCH" | "DELETE";
-      body?: unknown;
-      query?: Record<string, QueryValue>;
-      skipAuthRetry?: boolean;
-    },
+    options?: CoreApiRequestOptions,
   ): Promise<T> => {
     const normalizedPath = path.replace(/^\/+/, "");
     const url = new URL(normalizedPath, `${baseUrl}/`);
@@ -197,5 +212,11 @@ export function createCoreApiClient(config?: {
     post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body }),
     put: <T>(path: string, body?: unknown) => request<T>(path, { method: "PUT", body }),
     patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body }),
+    delete: <T>(path: string, body?: unknown) => request<T>(path, { method: "DELETE", body }),
+    withScope: (nextScope: ApiScope) => createCoreApiClient({
+      baseUrl,
+      accessToken,
+      scope: { ...scope, ...nextScope },
+    }),
   };
 }

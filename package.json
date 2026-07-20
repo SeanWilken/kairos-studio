@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "preview": "vite preview",
-    "build": "vite build",
+    "build": "tsc -b --pretty false && vite build",
+    "typecheck": "tsc -b --pretty false",
     "prepare": "husky",
     "check:frontend": "vite build",
     "check:changelog": "node scripts/check-changelog.mjs",
@@ -81,6 +82,7 @@
     "@commitlint/config-conventional": "^19.8.0",
     "husky": "^9.1.7",
     "tailwindcss": "4.1.12",
+    "typescript": "6.0.2",
     "vite": "6.3.5"
   },
   "peerDependencies": {

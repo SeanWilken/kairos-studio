@@ -15,10 +15,6 @@ import {
   TabsContent,
   Textarea,
   WizardTemplate,
-  Card,
-  CardHeader,
-  CardTitle,
-  CardContent,
 } from "@myai-tech/myui";
 import { PersonaTraitCard } from "./PersonaTraitCard";
 import { PersonaResumePreview } from "./PersonaResumePreview";
@@ -207,7 +203,6 @@ export function PersonaResumeBuilder(props: {
       const parsed = asObj(JSON.parse(importPayloadText));
       const data = asObj(parsed.data);
       const personality = asObj(parsed.personality);
-      const operationalPolicies = asObj(parsed.operational_policies);
       const promptBlocks = asObj(parsed.prompt_blocks);
       const personaName = asString(parsed.persona_name);
       const personaRole = asString(parsed.persona_role);

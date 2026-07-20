@@ -69,7 +69,6 @@ export function CreatePersonaStudioPage() {
   const [saveSuccess, setSaveSuccess] = useState("");
   const [activeTab, setActiveTab] = useState("resume");
   const [builderSeed, setBuilderSeed] = useState<Partial<PersonaBuilderValues>>({});
-  const [builderDraft, setBuilderDraft] = useState<PersonaBuilderValues | null>(null);
   const [builderPrompt, setBuilderPrompt] = useState("");
   const [builderStep, setBuilderStep] = useState(0);
   const [testChannelId, setTestChannelId] = useState("");
@@ -214,8 +213,7 @@ export function CreatePersonaStudioPage() {
     [activeOrgId, builderSeed],
   );
 
-  const handleBuilderChange = useCallback((values: PersonaBuilderValues, systemPrompt: string) => {
-    setBuilderDraft(values);
+  const handleBuilderChange = useCallback((_values: PersonaBuilderValues, systemPrompt: string) => {
     setBuilderPrompt(systemPrompt);
   }, []);
 

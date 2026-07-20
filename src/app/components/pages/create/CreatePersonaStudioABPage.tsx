@@ -266,7 +266,6 @@ export function CreatePersonaStudioABPage() {
   const handleChatTest = useCallback(async ({
     message,
     values,
-    systemPrompt,
   }: {
     message: string;
     values: PersonaBuilderValues;

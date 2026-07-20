@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate, useNavigate } from "react-router";
-import { Alert, AlertDescription, AlertTitle, Badge, Button, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogHeader, DialogTitle } from "@myai-tech/myui";
+import { Alert, AlertDescription, AlertTitle, Badge, Card, CardContent, CardHeader, CardTitle, Dialog, DialogContent, DialogHeader, DialogTitle } from "@myai-tech/myui";
 import {
   FormWizard,
   createAgentPersonaCreationWizardFormProps,
@@ -15,7 +15,7 @@ import {
   type WizardVariant,
 } from "../../wizard/registration/steps/TestForm";
 import { bootstrapApi, createCoreApiClient, studioApi } from "../../../../lib/api";
-import { clearAuthSession, getAccessToken } from "../../../../lib/auth-session";
+import { getAccessToken, saveAuthSession } from "../../../../lib/auth-session";
 import {
   enqueueCreateJob,
   getCreateQueueState,
@@ -25,6 +25,7 @@ import {
   type CreateQueueJob,
 } from "../../../../lib/create-request-queue";
 import { getRuntimeConfig } from "../../../../config/runtime";
+import { setWorkspaceScope } from "../../../../lib/workspace-scope";
 
 type OnboardingRecord = {
   id: string;
@@ -191,11 +192,29 @@ export function CreateRecordsPage({ variant }: { variant: WizardVariant }) {
       typeof result === "object" &&
       "auth" in result
     ) {
-      const auth = (result as { auth?: { access_token?: string; refresh_token?: string } }).auth;
+      const auth = (result as { auth?: { access_token?: string; refresh_token?: string; expires_in?: number } }).auth;
       if (auth?.access_token && auth?.refresh_token) {
-        clearAuthSession();
-        setAccessToken("");
-        navigate("/login?bootstrap=complete", { replace: true });
+        saveAuthSession({
+          accessToken: auth.access_token,
+          refreshToken: auth.refresh_token,
+          accessTokenExpiresAt: typeof auth.expires_in === "number" ? Date.now() + auth.expires_in * 1000 : undefined,
+        });
+        setAccessToken(auth.access_token);
+
+        const verifiedUser = (result as { verifiedUser?: { org_id?: string | null } }).verifiedUser;
+        const targetOrgId = typeof verifiedUser?.org_id === "string" && verifiedUser.org_id.trim()
+          ? verifiedUser.org_id
+          : typeof job.values.target_org_id === "string" && job.values.target_org_id.trim()
+            ? job.values.target_org_id
+            : "";
+
+        if (targetOrgId) {
+          setWorkspaceScope({ type: "organization", id: targetOrgId, name: targetOrgId });
+        } else {
+          setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
+        }
+
+        navigate("/?focus=setup", { replace: true });
       }
     }
 
@@ -292,10 +311,7 @@ export function CreateRecordsPage({ variant }: { variant: WizardVariant }) {
     }
   };
 
-  const usersCount = snapshotQuery.isSuccess ? snapshotQuery.data.users.length : null;
-  const needsGlobalAdmin = variant === "user_create"
-    ? !accessToken || usersCount === 0
-    : usersCount === 0;
+  const needsGlobalAdmin = variant === "user_create" && !accessToken;
 
   if (variant !== "user_create" && !accessToken) {
     return <Navigate to="/login" replace />;

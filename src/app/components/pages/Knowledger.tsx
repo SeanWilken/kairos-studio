@@ -1,15 +1,100 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, type MouseEvent } from "react";
 import {
-  ChevronLeft, ChevronRight, ChevronDown, ArrowLeft, ArrowRight,
+  ChevronLeft, ChevronRight, ArrowLeft, ArrowRight,
   Download, Copy, Code2, Globe, FileText, Database, Table2, BarChart2,
   CheckSquare, Package, Workflow, Bot, MessageSquare, Shield, GitMerge,
-  Brain, Bookmark, X, Plus, Tag, Zap, Link2, Search, Eye, Layers,
-  Hash, Star, AlertTriangle, CheckCircle, Clock, MoreHorizontal,
-  Maximize2, Minimize2, RefreshCw, Settings, Lock, Sparkles,
-  ArrowUpRight, Info, Network, Filter, BookOpen, Route,
-  ThumbsUp, ThumbsDown, Edit2, Check, Dot, Activity, TrendingUp,
-  GitBranch, Circle, Square, CornerDownRight, AlignLeft, MapPin,
+  Brain, Bookmark, X, Plus, Search, Layers,
+  ArrowUpRight, Check,
+  CornerDownRight, AlignLeft,
 } from "lucide-react";
+
+type NodeType = "domain" | "document" | "dataset" | "table" | "metric" | "task" | "project" | "workflow" | "persona" | "faq" | "policy" | "decision" | "training" | "memory";
+type EdgeType = "semantic" | "cites" | "part-of" | "governs" | "trained-on" | "depends" | "references" | "generates";
+type TagSource = "human" | "ai";
+
+type KnowledgeTag = {
+  tag: string;
+  weight: number;
+  source: TagSource;
+};
+
+type KnowledgeEdge = {
+  to: string;
+  type: EdgeType;
+  strength: number;
+  sharedTags: string[];
+};
+
+type KnowledgeDocument = {
+  id: string;
+  title: string;
+  status: string;
+  relevance: number;
+};
+
+type KnowledgeChunk = {
+  id: string;
+  text: string;
+  tags: string[];
+  relevance: number;
+};
+
+type KnowledgeMetadata = {
+  tags: KnowledgeTag[];
+  coverage?: number;
+  freshness?: number;
+  confidence?: number;
+  source?: string;
+  lastIndexed?: string;
+  aiAssisted?: boolean;
+  status?: string;
+  owner?: string;
+  vectorDims?: number;
+  embeddingModel?: string;
+  chunkCount?: number;
+  fileSize?: string;
+  accessLevel?: string;
+  rowCount?: string;
+  tableCount?: number;
+  sizeGB?: number;
+  accessDomains?: number;
+  restrictedDomains?: number;
+  exampleCount?: number;
+  qualityScore?: number;
+  successRate?: number;
+  runsThisMonth?: number;
+};
+
+type KnowledgeNode = {
+  id: string;
+  type: NodeType;
+  label: string;
+  desc: string;
+  meta: KnowledgeMetadata;
+  edges: KnowledgeEdge[];
+  documents: KnowledgeDocument[];
+  chunks?: KnowledgeChunk[];
+};
+
+type KnowledgeNodes = Record<string, KnowledgeNode>;
+
+type GraphStep = Partial<KnowledgeEdge & KnowledgeDocument & KnowledgeChunk>;
+
+function isKnowledgeEdge(step: GraphStep | undefined): step is KnowledgeEdge {
+  return Boolean(step && typeof step.to === "string" && typeof step.type === "string" && typeof step.strength === "number" && Array.isArray(step.sharedTags));
+}
+
+function isKnowledgeDocument(step: GraphStep | undefined): step is KnowledgeDocument {
+  return Boolean(step && typeof step.id === "string" && typeof step.title === "string" && typeof step.status === "string" && typeof step.relevance === "number");
+}
+
+function isKnowledgeChunk(step: GraphStep | undefined): step is KnowledgeChunk {
+  return Boolean(step && typeof step.id === "string" && typeof step.text === "string" && Array.isArray(step.tags) && typeof step.relevance === "number");
+}
+
+function compactEntries(entries: Array<[string, string | number] | false | "" | 0 | undefined>): Array<[string, string | number]> {
+  return entries.filter((entry): entry is [string, string | number] => Array.isArray(entry));
+}
 
 // ─── Design Tokens ────────────────────────────────────────────────
 const C = {
@@ -46,7 +131,7 @@ const NT = {
   decision: { color: "#0EA5E9", bg: "#E0F2FE",  label: "Decision", Icon: GitMerge },
   training: { color: "#14B8A6", bg: "#CCFBF1",  label: "Training", Icon: Brain },
   memory:   { color: "#6366F1", bg: "#EEF2FF",  label: "Memory",   Icon: Bookmark },
-};
+} satisfies Record<NodeType, { color: string; bg: string; label: string; Icon: typeof Globe }>;
 
 const EDGE_TYPES = {
   "semantic":   { color: "#6366F1", label: "Semantic similarity", style: "solid" },
@@ -57,10 +142,10 @@ const EDGE_TYPES = {
   "depends":    { color: "#F59E0B", label: "Dependency",          style: "dotted" },
   "references": { color: "#8B5CF6", label: "References",          style: "solid" },
   "generates":  { color: "#F97316", label: "Generates",           style: "dashed" },
-};
+} satisfies Record<EdgeType, { color: string; label: string; style: "solid" | "dashed" | "dotted" }>;
 
 // ─── Rich Knowledge Graph Data ────────────────────────────────────
-const NODES = {
+const NODES: KnowledgeNodes = {
   "domain-product": {
     id: "domain-product", type: "domain", label: "Product",
     desc: "Core product knowledge domain. Covers roadmaps, feature definitions, user research, competitive intelligence, and strategic decisions.",
@@ -534,14 +619,14 @@ const NODES = {
 };
 
 // ─── Mermaid Generator ────────────────────────────────────────────
-function generateMermaid(centerNode, nodes, depth = 2) {
-  const visited = new Set();
+function generateMermaid(centerNode: string, nodes: KnowledgeNodes, depth = 2) {
+  const visited = new Set<string>();
   const lines = ["graph LR"];
-  const sanitize = (s) => s.replace(/[^a-zA-Z0-9_]/g, "_");
-  const quote = (s) => `["${s.replace(/"/g, "'")}"]`;
-  const nodeIds = new Set();
+  const sanitize = (value: string) => value.replace(/[^a-zA-Z0-9_]/g, "_");
+  const quote = (value: string) => `["${value.replace(/"/g, "'")}"]`;
+  const nodeIds = new Set<string>();
 
-  const traverse = (nodeId, currentDepth) => {
+  const traverse = (nodeId: string, currentDepth: number) => {
     if (visited.has(nodeId) || currentDepth > depth) return;
     visited.add(nodeId);
     const node = nodes[nodeId];
@@ -586,8 +671,8 @@ function generateMermaid(centerNode, nodes, depth = 2) {
 }
 
 // ─── Tiny shared components ───────────────────────────────────────
-const Chip = ({ label }) => {
-  const map = {
+const Chip = ({ label }: { label: string }) => {
+  const map: Record<string, { bg: string; txt: string }> = {
     "Public": { bg: "#DCFCE7", txt: "#15803D" },
     "Internal": { bg: "#DBEAFE", txt: "#1D4ED8" },
     "Confidential": { bg: "#FEF9C3", txt: "#92400E" },
@@ -603,14 +688,14 @@ const Chip = ({ label }) => {
   return <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: s.bg, color: s.txt, borderRadius: 20, padding: "2px 8px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>;
 };
 
-const NodeIcon = ({ type, size = 14, color }) => {
+const NodeIcon = ({ type, size = 14, color }: { type: NodeType; size?: number; color?: string }) => {
   const t = NT[type];
   if (!t) return null;
   const Icon = t.Icon;
   return <Icon size={size} color={color || t.color} />;
 };
 
-const NodeBadge = ({ type }) => {
+const NodeBadge = ({ type }: { type: NodeType }) => {
   const t = NT[type] || NT.document;
   const Icon = t.Icon;
   return (
@@ -620,14 +705,21 @@ const NodeBadge = ({ type }) => {
   );
 };
 
-const WeightBar = ({ weight, color }) => (
+const WeightBar = ({ weight, color }: { weight: number; color?: string }) => (
   <div style={{ flex: 1, height: 4, background: C.borderLight, borderRadius: 2, overflow: "hidden", maxWidth: 60 }}>
     <div style={{ width: `${weight * 100}%`, height: "100%", background: color || C.accent, borderRadius: 2 }} />
   </div>
 );
 
 // ─── Node Diagram (SVG) ───────────────────────────────────────────
-const NodeDiagram = ({ centerNode, nodes, onNavigate, highlightId }) => {
+type NodeDiagramProps = {
+  centerNode: string;
+  nodes: KnowledgeNodes;
+  onNavigate: (id: string) => void;
+  highlightId: string | null;
+};
+
+const NodeDiagram = ({ centerNode, nodes, onNavigate, highlightId }: NodeDiagramProps) => {
   const node = nodes[centerNode];
   if (!node) return null;
 
@@ -682,7 +774,7 @@ const NodeDiagram = ({ centerNode, nodes, onNavigate, highlightId }) => {
               fill="none"
               stroke={isHighlight ? et?.color || C.accent : isDashed ? (et?.color || "#94A3B8") + "80" : (et?.color || "#CBD5E1") + "90"}
               strokeWidth={isHighlight ? 2.5 : edge.strength * 2.2}
-              strokeDasharray={isDashed ? "5,4" : et?.style === "dotted" ? "2,4" : "none"}
+              strokeDasharray={isDashed ? "5,4" : "none"}
               markerEnd={`url(#arr-${i})`}
               opacity={isHighlight ? 1 : 0.6}
             />
@@ -752,7 +844,7 @@ const NodeDiagram = ({ centerNode, nodes, onNavigate, highlightId }) => {
 };
 
 // ─── Mermaid Export Modal ─────────────────────────────────────────
-const MermaidModal = ({ nodeId, nodes, onClose }) => {
+const MermaidModal = ({ nodeId, nodes, onClose }: { nodeId: string; nodes: KnowledgeNodes; onClose: () => void }) => {
   const [depth, setDepth] = useState(2);
   const [copied, setCopied] = useState(false);
   const code = useMemo(() => generateMermaid(nodeId, nodes, depth), [nodeId, nodes, depth]);
@@ -820,7 +912,13 @@ const MermaidModal = ({ nodeId, nodes, onClose }) => {
 };
 
 // ─── Tag Editor ───────────────────────────────────────────────────
-const TagEditor = ({ tags, onAdd, onUpdate }) => {
+type TagEditorProps = {
+  tags: KnowledgeTag[];
+  onAdd: (tag: KnowledgeTag) => void;
+  onUpdate: (index: number, tag: KnowledgeTag) => void;
+};
+
+const TagEditor = ({ tags, onAdd, onUpdate }: TagEditorProps) => {
   const [adding, setAdding] = useState(false);
   const [newTag, setNewTag] = useState("");
 
@@ -840,7 +938,7 @@ const TagEditor = ({ tags, onAdd, onUpdate }) => {
             color: t.source === "human" ? C.infoTxt : C.purpleTxt,
             fontFamily: "'DM Sans', sans-serif",
           }}>#{t.tag}</span>
-          <WeightBar weight={t.weight} color={NT[Object.keys(NT)[0]]?.color} />
+          <WeightBar weight={t.weight} color={NT.domain.color} />
           <span style={{ fontSize: 10, color: C.txtMuted, minWidth: 28, textAlign: "right" }}>{Math.round(t.weight * 100)}%</span>
           <Chip label={t.source} />
           <button onClick={() => onUpdate(i, { ...t, weight: Math.min(1, t.weight + 0.05) })} style={{ border: "none", background: "none", cursor: "pointer", padding: "2px 4px", color: C.success, fontSize: 10, fontWeight: 700 }}>▲</button>
@@ -869,18 +967,18 @@ export default function GraphExplorer() {
   const [history, setHistory] = useState(["domain-product"]);
   const [histIdx, setHistIdx] = useState(0);
   const [stepIdx, setStepIdx] = useState(0);
-  const [highlightEdge, setHighlightEdge] = useState(null);
+  const [highlightEdge, setHighlightEdge] = useState<string | null>(null);
   const [showMermaid, setShowMermaid] = useState(false);
   const [activeTab, setActiveTab] = useState("Meta");
   const [diagramDepth, setDiagramDepth] = useState(1);
-  const [stepMode, setStepMode] = useState("relations"); // "relations" | "documents" | "chunks"
+  const [stepMode, setStepMode] = useState<"relations" | "documents" | "chunks">("relations");
 
   const node = nodes[currentId];
   const edges = node?.edges || [];
   const docs = node?.documents || [];
   const chunks = node?.chunks || [];
 
-  const navigateTo = useCallback((id) => {
+  const navigateTo = useCallback((id: string) => {
     if (!nodes[id]) return;
     setCurrentId(id);
     setHistory(prev => [...prev.slice(0, histIdx + 1), id]);
@@ -896,7 +994,7 @@ export default function GraphExplorer() {
     if (histIdx < history.length - 1) { setHistIdx(histIdx + 1); setCurrentId(history[histIdx + 1]); setStepIdx(0); }
   };
 
-  const stepItems = stepMode === "relations" ? edges : stepMode === "documents" ? docs : chunks;
+  const stepItems: GraphStep[] = stepMode === "relations" ? edges : stepMode === "documents" ? docs : chunks;
   const currentStep = stepItems[stepIdx];
 
   const prevStep = () => {
@@ -916,7 +1014,7 @@ export default function GraphExplorer() {
     else setHighlightEdge(null);
   }, [stepIdx, stepMode, currentId]);
 
-  const updateNodeTag = (nodeId, tagIdx, newTag) => {
+  const updateNodeTag = (nodeId: string, tagIdx: number, newTag: KnowledgeTag) => {
     setNodes(prev => ({
       ...prev,
       [nodeId]: {
@@ -929,7 +1027,7 @@ export default function GraphExplorer() {
     }));
   };
 
-  const addNodeTag = (nodeId, tag) => {
+  const addNodeTag = (nodeId: string, tag: KnowledgeTag) => {
     setNodes(prev => ({
       ...prev,
       [nodeId]: {
@@ -995,7 +1093,7 @@ export default function GraphExplorer() {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div style={{ display: "flex", background: C.bgSubtle, borderRadius: 7, padding: 2, border: `1px solid ${C.border}` }}>
             {["relations", "documents", "chunks"].map(m => (
-              <button key={m} onClick={() => { setStepMode(m); setStepIdx(0); }} style={{
+              <button key={m} onClick={() => { setStepMode(m as typeof stepMode); setStepIdx(0); }} style={{
                 padding: "3px 10px", borderRadius: 5, border: "none", cursor: "pointer", fontSize: 11, fontWeight: stepMode === m ? 600 : 400,
                 background: stepMode === m ? C.bgSurface : "transparent",
                 color: stepMode === m ? C.accent : C.txtMuted,
@@ -1069,14 +1167,14 @@ export default function GraphExplorer() {
                 />
                 <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 14 }}>
                   <div style={{ fontSize: 10, fontWeight: 700, color: C.txtMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 8 }}>Index Info</div>
-                  {[
+                  {compactEntries([
                     meta.source && ["Source", meta.source],
                     meta.vectorDims && ["Dimensions", meta.vectorDims],
                     meta.embeddingModel && ["Model", meta.embeddingModel.split("-").slice(-1)[0]],
                     meta.chunkCount && ["Chunks", meta.chunkCount],
                     meta.lastIndexed && ["Last indexed", meta.lastIndexed],
                     meta.aiAssisted !== undefined && ["AI assisted", meta.aiAssisted ? "Yes" : "No"],
-                  ].filter(Boolean).map(([k, v], i) => (
+                  ]).map(([k, v], i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", borderBottom: `1px solid ${C.borderLight}` }}>
                       <span style={{ fontSize: 11, color: C.txtMuted }}>{k}</span>
                       <span style={{ fontSize: 11, fontWeight: 600, color: C.txt }}>{v}</span>
@@ -1088,7 +1186,7 @@ export default function GraphExplorer() {
             {activeTab === "Info" && (
               <>
                 <div style={{ fontSize: 10, fontWeight: 700, color: C.txtMuted, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>Properties</div>
-                {[
+                {compactEntries([
                   meta.owner && ["Owner", meta.owner],
                   meta.fileSize && ["File size", meta.fileSize],
                   meta.rowCount && ["Rows", meta.rowCount],
@@ -1098,7 +1196,7 @@ export default function GraphExplorer() {
                   meta.accessDomains && ["Access domains", meta.accessDomains],
                   meta.successRate && ["Success rate", `${meta.successRate}%`],
                   meta.runsThisMonth && ["Runs / month", meta.runsThisMonth],
-                ].filter(Boolean).map(([k, v], i) => (
+                ]).map(([k, v], i) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${C.borderLight}` }}>
                     <span style={{ fontSize: 11, color: C.txtMuted }}>{k}</span>
                     <span style={{ fontSize: 11, fontWeight: 600, color: C.txt }}>{v}</span>
@@ -1184,7 +1282,7 @@ export default function GraphExplorer() {
             {/* Step info card */}
             {currentStep && (
               <div style={{ padding: "12px 20px", borderBottom: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center", gap: 14 }}>
-                {stepMode === "relations" && currentStep.to && nodes[currentStep.to] && (() => {
+                {stepMode === "relations" && isKnowledgeEdge(currentStep) && nodes[currentStep.to] && (() => {
                   const target = nodes[currentStep.to];
                   const nt2 = NT[target.type] || NT.document;
                   return (
@@ -1227,7 +1325,7 @@ export default function GraphExplorer() {
                   );
                 })()}
 
-                {stepMode === "documents" && currentStep && (
+                {stepMode === "documents" && isKnowledgeDocument(currentStep) && (
                   <>
                     <div style={{ width: 38, height: 38, borderRadius: 9, background: C.infoBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <FileText size={18} color={C.info} />
@@ -1251,7 +1349,7 @@ export default function GraphExplorer() {
                   </>
                 )}
 
-                {stepMode === "chunks" && currentStep && (
+                {stepMode === "chunks" && isKnowledgeChunk(currentStep) && (
                   <>
                     <div style={{ width: 38, height: 38, borderRadius: 9, background: C.tealBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                       <AlignLeft size={18} color={C.teal} />
@@ -1328,8 +1426,8 @@ export default function GraphExplorer() {
                     background: isActive ? nt2.bg : "transparent",
                     borderLeft: isActive ? `3px solid ${nt2.color}` : "3px solid transparent",
                   }}
-                  onMouseEnter={e => !isActive && (e.currentTarget.style.background = C.bgSubtle)}
-                  onMouseLeave={e => !isActive && (e.currentTarget.style.background = "transparent")}
+                  onMouseEnter={(event: MouseEvent<HTMLDivElement>) => !isActive && (event.currentTarget.style.background = C.bgSubtle)}
+                  onMouseLeave={(event: MouseEvent<HTMLDivElement>) => !isActive && (event.currentTarget.style.background = "transparent")}
                 >
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <div style={{ width: 28, height: 28, borderRadius: 7, background: nt2.color + "20", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
