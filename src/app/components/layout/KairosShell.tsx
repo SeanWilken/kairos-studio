@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -34,6 +34,8 @@ import { authApi, bootstrapApi, createCoreApiClient, healthApi, studioApi } from
 import { clearAuthSession, getAccessToken, saveAuthSession, subscribeAuthSession } from "../../../lib/auth-session";
 import { getCreateQueueState, setCreateQueuePaused, subscribeCreateQueue } from "../../../lib/create-request-queue";
 import { queryClient } from "../../../lib/query-client";
+import { constrainWorkspaceScope, readAuthorizedContext } from "../../../lib/auth-context";
+import { getRuntimeConfig } from "../../../config/runtime";
 import { buildWorkspaceNotifications, type WorkspaceHealthLevel } from "../../../lib/workspace-notifications";
 import {
   getWorkspaceScope,
@@ -66,6 +68,15 @@ function normalizeList<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function dedupeOrganizations(organizations: Array<{ id: string; name: string }>): Array<{ id: string; name: string }> {
+  const unique = new Map<string, { id: string; name: string }>();
+  organizations.forEach((organization) => {
+    if (!organization.id || unique.has(organization.id)) return;
+    unique.set(organization.id, organization);
+  });
+  return [...unique.values()];
+}
+
 function statusChip(level: WorkspaceHealthLevel): { label: string; className: string } {
   if (level === "critical") return { label: "Core Issues", className: "bg-red-50 border-red-200 text-red-900" };
   if (level === "warning") return { label: "Core Degraded", className: "bg-amber-50 border-amber-200 text-amber-900" };
@@ -74,15 +85,18 @@ function statusChip(level: WorkspaceHealthLevel): { label: string; className: st
 
 export function KairosShell() {
   const navigate = useNavigate();
-  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
-  const tenantId = env.VITE_MYAI_TENANT_ID ?? "tenant-local";
-  const runtimeBaseUrl = env.VITE_MYAI_CORE_API_BASE_URL;
+  const runtimeConfig = getRuntimeConfig();
   const [accessToken, setAccessToken] = useState(() => getAccessToken());
+  const authorizedContext = readAuthorizedContext(accessToken);
+  const tenantId = authorizedContext.tenantId ?? runtimeConfig.tenantId;
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
 
   const [queuePaused, setQueuePausedState] = useState(() => getCreateQueueState().paused);
-  const [scope, setScope] = useState<WorkspaceScope>(() => getWorkspaceScope(tenantId));
+  const [scope, setScope] = useState<WorkspaceScope>(() => constrainWorkspaceScope(accessToken, tenantId, getWorkspaceScope(tenantId)));
   const [teams, setTeams] = useState<TeamRecord[]>(() => readWorkspaceTeams());
   const [navCollapsed, setNavCollapsed] = useState(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true");
+  const previousContextRef = useRef("");
+  const hadAuthenticatedSessionRef = useRef(Boolean(accessToken));
 
   useEffect(() => subscribeCreateQueue((next) => setQueuePausedState(next.paused)), []);
   useEffect(() => subscribeWorkspaceScope(setScope, tenantId), [tenantId]);
@@ -90,10 +104,38 @@ export function KairosShell() {
   useEffect(() => subscribeAuthSession(() => setAccessToken(getAccessToken())), []);
 
   useEffect(() => {
+    const constrained = constrainWorkspaceScope(accessToken, tenantId, scope);
+    if (constrained.type === scope.type && constrained.id === scope.id && constrained.orgId === scope.orgId) return;
+    setWorkspaceScope(constrained);
+  }, [accessToken, scope, tenantId]);
+
+  useEffect(() => {
+    if (accessToken) {
+      hadAuthenticatedSessionRef.current = true;
+      return;
+    }
+    if (!hadAuthenticatedSessionRef.current) return;
+    queryClient.clear();
+    setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
+    navigate("/login", { replace: true });
+  }, [accessToken, navigate, tenantId]);
+
+  useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, navCollapsed ? "true" : "false");
   }, [navCollapsed]);
 
   const scopeOrgId = scope.type === "organization" ? scope.id : scope.type === "team" ? scope.orgId : undefined;
+
+  useEffect(() => {
+    const contextKey = `${accessToken}:${scope.type}:${scopeOrgId ?? scope.id}`;
+    if (!previousContextRef.current) {
+      previousContextRef.current = contextKey;
+      return;
+    }
+    if (previousContextRef.current === contextKey) return;
+    previousContextRef.current = contextKey;
+    void queryClient.invalidateQueries();
+  }, [accessToken, scope.id, scope.type, scopeOrgId]);
 
   const client = useMemo(
     () =>
@@ -108,15 +150,19 @@ export function KairosShell() {
   const workspaceQuery = useQuery({
     queryKey: ["shell", "workspace", tenantId, scope.type, scope.id, Boolean(accessToken)],
     queryFn: async () => {
-      const [health, tenantStatus, organizationsResponse, usersResponse] = await Promise.all([
+      const [health, tenantStatus, organizationsResponse, usersResponse, currentUser] = await Promise.all([
         healthApi.getHealth(client),
         bootstrapApi.getTenantStatus(client),
         accessToken ? studioApi.listOrganizations(client) : Promise.resolve({ items: [] }),
         accessToken ? studioApi.listUsers(client, { orgId: scopeOrgId }) : Promise.resolve({ items: [] }),
+        accessToken ? authApi.me(client).catch(() => null) : Promise.resolve(null),
       ]);
 
       const organizations = normalizeList<{ id: string; name: string }>(organizationsResponse);
       const users = normalizeList<{ id: string }>(usersResponse);
+      const currentUserOrganizations = Array.isArray(currentUser?.org_options) ? currentUser.org_options : [];
+      const organizationsCount = Math.max(organizations.length, currentUserOrganizations.length);
+      const usersCount = Math.max(users.length, currentUser ? 1 : 0);
       const failedJobs = getCreateQueueState().jobs.filter((job) => job.status === "failed").length;
 
       const healthItems = [
@@ -125,17 +171,16 @@ export function KairosShell() {
 
       const setupIncompleteCount = [
         !tenantStatus.configured,
-        !accessToken,
-        users.length === 0,
-        organizations.length === 0,
+        !currentUser,
+        organizationsCount === 0,
       ].filter(Boolean).length;
 
       const notifications = buildWorkspaceNotifications({
         healthItems,
         queueFailedCount: failedJobs,
         setupIncompleteCount,
-        organizationsCount: organizations.length,
-        usersCount: users.length,
+        organizationsCount,
+        usersCount,
       });
 
       return { organizations, users, notifications, healthLevel: healthItems[0].level };
@@ -144,7 +189,7 @@ export function KairosShell() {
   });
 
   const meQuery = useQuery({
-    queryKey: ["shell", "me", tenantId, Boolean(accessToken)],
+    queryKey: ["shell", "me", tenantId, scopeOrgId, Boolean(accessToken)],
     enabled: Boolean(accessToken),
     queryFn: async () => authApi.me(client),
     retry: false,
@@ -157,13 +202,16 @@ export function KairosShell() {
       if (!tokenSet.access_token || !tokenSet.refresh_token) {
         throw new Error("Context switch succeeded but token payload was missing.");
       }
+      const switchedContext = readAuthorizedContext(tokenSet.access_token);
+      if (switchedContext.orgId !== organization.id) {
+        throw new Error("Context switch returned a token for a different organization.");
+      }
       saveAuthSession({
         accessToken: tokenSet.access_token,
         refreshToken: tokenSet.refresh_token,
         accessTokenExpiresAt: typeof tokenSet.expires_in === "number" ? Date.now() + tokenSet.expires_in * 1000 : undefined,
       });
-      setWorkspaceScope({ type: "organization", id: organization.id, name: organization.name });
-      queryClient.clear();
+      setWorkspaceScope({ type: "organization", id: switchedContext.orgId, name: organization.name });
     },
   });
 
@@ -175,7 +223,7 @@ export function KairosShell() {
         .filter((option): option is { org_id: string; name?: string } => typeof option?.org_id === "string")
         .map((option) => ({ id: option.org_id, name: option.name ?? option.org_id }))
     : [];
-  const organizations = organizationsFromMe.length > 0 ? organizationsFromMe : organizationsFromWorkspace;
+  const organizations = dedupeOrganizations(organizationsFromMe.length > 0 ? organizationsFromMe : organizationsFromWorkspace);
 
   const workspaceLabel =
     scope.type === "tenant"
@@ -205,11 +253,12 @@ export function KairosShell() {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-72">
-              <DropdownMenuItem onSelect={() => setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId })}>
-                <Building2 className="mr-2 h-4 w-4" />
-                Tenant: {tenantId}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
+              {!authorizedContext.orgId ? (
+                <DropdownMenuItem disabled>
+                  <Building2 className="mr-2 h-4 w-4" />
+                  Tenant: {tenantId}
+                </DropdownMenuItem>
+              ) : null}
               {organizations.map((organization) => (
                 <DropdownMenuItem
                   key={`org-${organization.id}`}
@@ -223,7 +272,7 @@ export function KairosShell() {
                 </DropdownMenuItem>
               ))}
               {teams.length > 0 ? <DropdownMenuSeparator /> : null}
-              {teams.map((team) => {
+              {teams.filter((team) => team.orgId === authorizedContext.orgId).map((team) => {
                 const orgName = organizations.find((org) => org.id === team.orgId)?.name ?? team.orgId;
                 return (
                   <DropdownMenuItem
@@ -278,7 +327,9 @@ export function KairosShell() {
                   <User className="h-4 w-4 text-zinc-600" />
                 </div>
                 <span className="text-sm font-medium">
-                  {typeof meQuery.data?.first_name === "string" ? `${meQuery.data.first_name} ${meQuery.data.last_name ?? ""}`.trim() : "User"}
+                  {typeof meQuery.data?.user?.first_name === "string"
+                    ? `${meQuery.data.user.first_name} ${meQuery.data.user.last_name ?? ""}`.trim()
+                    : "User"}
                 </span>
                 <ChevronDown className="h-4 w-4" />
               </button>
@@ -307,6 +358,8 @@ export function KairosShell() {
                 onSelect={(event) => {
                   event.preventDefault();
                   clearAuthSession();
+                  queryClient.clear();
+                  setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
                   navigate("/login", { replace: true });
                 }}
               >

@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 if command -v bun >/dev/null 2>&1; then
   bunx --bun vite build
+  bun test src
   bun run check:changelog
 elif command -v npm >/dev/null 2>&1; then
   npm run check:frontend

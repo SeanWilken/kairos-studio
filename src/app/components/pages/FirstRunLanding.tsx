@@ -1,7 +1,7 @@
 import { Navigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@myai-tech/myui";
-import { bootstrapApi, createCoreApiClient, healthApi, studioApi } from "../../../lib/api";
+import { authApi, bootstrapApi, createCoreApiClient, healthApi, studioApi } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";
 import { WorkspaceHome } from "./WorkspaceHome";
 import { getRuntimeConfig } from "../../../config/runtime"
@@ -48,6 +48,20 @@ export function FirstRunLanding() {
     retry: false,
   });
 
+  const meQuery = useQuery({
+    queryKey: ["first-run", "me", tenantId],
+    enabled: Boolean(accessToken && gateQuery.data?.tenantConfigured),
+    queryFn: async () => {
+      const client = createCoreApiClient({
+        baseUrl: runtimeBaseUrl,
+        accessToken,
+        scope: { tenantId },
+      });
+      return authApi.me(client);
+    },
+    retry: false,
+  });
+
   if (gateQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl p-8">
@@ -79,10 +93,10 @@ export function FirstRunLanding() {
   }
 
   if (!accessToken) {
-    return <Navigate to="/create/user?bootstrap=1" replace />;
+    return <Navigate to="/login" replace />;
   }
 
-  if (usersQuery.isLoading) {
+  if (usersQuery.isLoading || meQuery.isLoading) {
     return (
       <div className="mx-auto w-full max-w-7xl p-8">
         <Card>
@@ -95,11 +109,15 @@ export function FirstRunLanding() {
     );
   }
 
+  if (meQuery.isSuccess) {
+    return <WorkspaceHome />;
+  }
+
   if (usersQuery.isSuccess && usersQuery.data === 0) {
     return <Navigate to="/create/user?bootstrap=1" replace />;
   }
 
-  if (usersQuery.isError) {
+  if (usersQuery.isError || meQuery.isError) {
     return <Navigate to="/login" replace />;
   }
 

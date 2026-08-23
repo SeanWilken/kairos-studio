@@ -30,9 +30,9 @@ import {
   TabsList,
   TabsTrigger,
 } from "@myai-tech/myui";
-import { createCoreApiClient, governanceApi, studioApi, type AppAccessGrantApps, type OrgKnowledgePolicy, type StudioOrganization, type StudioUser } from "../../../lib/api";
-import { getAccessToken } from "../../../lib/auth-session";
-import { readWorkspaceTeams, type TeamRecord } from "../../../lib/workspace-scope";
+import { authApi, createCoreApiClient, governanceApi, studioApi, type AppAccessGrantApps, type OrgKnowledgePolicy, type StudioOrganization, type StudioUser } from "../../../lib/api";
+import { getAccessToken, subscribeAuthSession } from "../../../lib/auth-session";
+import { getWorkspaceScope, readWorkspaceTeams, subscribeWorkspaceScope, subscribeWorkspaceTeams, type TeamRecord, type WorkspaceScope } from "../../../lib/workspace-scope";
 import { getRuntimeConfig } from "../../../config/runtime"
 
 type HierarchyNode = {
@@ -48,6 +48,40 @@ function normalizeList<T>(value: unknown): T[] {
     return ((value as { items: T[] }).items ?? []) as T[];
   }
   return Array.isArray(value) ? (value as T[]) : [];
+}
+
+function normalizeCurrentUser(value: unknown): StudioUser | null {
+  const root = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const nested = root.user && typeof root.user === "object" ? (root.user as Record<string, unknown>) : root;
+  const auth = root.auth && typeof root.auth === "object" ? (root.auth as Record<string, unknown>) : {};
+  const id = typeof nested.id === "string"
+    ? nested.id
+    : typeof nested.user_id === "string"
+      ? nested.user_id
+      : typeof root.user_id === "string"
+        ? root.user_id
+        : "";
+  const email = typeof nested.email === "string" ? nested.email : typeof root.email === "string" ? root.email : "";
+  if (!id || !email) return null;
+
+  return {
+    id,
+    tenant_id: typeof nested.tenant_id === "string" ? nested.tenant_id : typeof root.tenant_id === "string" ? root.tenant_id : undefined,
+    org_id: typeof nested.org_id === "string"
+      ? nested.org_id
+      : typeof auth.org_id === "string"
+        ? auth.org_id
+        : typeof root.org_id === "string"
+          ? root.org_id
+          : undefined,
+    email,
+    first_name: typeof nested.first_name === "string" ? nested.first_name : typeof root.first_name === "string" ? root.first_name : "",
+    last_name: typeof nested.last_name === "string" ? nested.last_name : typeof root.last_name === "string" ? root.last_name : "",
+    status: typeof nested.status === "string" ? nested.status : typeof root.status === "string" ? root.status : "active",
+    role: typeof nested.role === "string" ? nested.role : typeof root.role === "string" ? root.role : undefined,
+    is_global_admin: nested.is_global_admin === true || auth.is_global_admin === true || root.is_global_admin === true,
+    created_at: typeof nested.created_at === "string" ? nested.created_at : typeof root.created_at === "string" ? root.created_at : undefined,
+  };
 }
 
 function buildHierarchy(
@@ -145,8 +179,13 @@ function OrgTreeNode({ node, level = 0 }: { node: HierarchyNode; level?: number 
 
 export function Organization() {
   const navigate = useNavigate();
+  const runtimeConfig = getRuntimeConfig();
+  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+  const tenantId = runtimeConfig.tenantId;
   const [searchTerm, setSearchTerm] = useState("");
-  const [teams] = useState<TeamRecord[]>(() => readWorkspaceTeams());
+  const [teams, setTeams] = useState<TeamRecord[]>(() => readWorkspaceTeams());
+  const [workspaceScope, setWorkspaceScopeState] = useState<WorkspaceScope>(() => getWorkspaceScope(tenantId));
+  const [accessToken, setAccessToken] = useState(() => getAccessToken());
   const [selectedOrgId, setSelectedOrgId] = useState("");
   const [policyDraft, setPolicyDraft] = useState<OrgKnowledgePolicy>(defaultPolicy);
   const [grantsDraft, setGrantsDraft] = useState<AppAccessGrantApps>(defaultGrants);
@@ -157,46 +196,67 @@ export function Organization() {
   const [explainIncludeIds, setExplainIncludeIds] = useState("");
   const [explainExcludeIds, setExplainExcludeIds] = useState("");
 
-  const runtimeConfig = getRuntimeConfig();
-  const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
-  const tenantId = runtimeConfig.tenantId;
-  const accessToken = getAccessToken();
+  useEffect(() => subscribeWorkspaceScope(setWorkspaceScopeState, tenantId), [tenantId]);
+  useEffect(() => subscribeWorkspaceTeams(setTeams), []);
+  useEffect(() => subscribeAuthSession(() => setAccessToken(getAccessToken())), []);
+
+  const workspaceOrgId = workspaceScope.type === "organization"
+    ? workspaceScope.id
+    : workspaceScope.type === "team"
+      ? (workspaceScope.orgId ?? "")
+      : "";
 
   const client = useMemo(
     () =>
       createCoreApiClient({
         baseUrl: runtimeBaseUrl,
         accessToken,
-        scope: { tenantId },
+        scope: { tenantId, orgId: workspaceOrgId || undefined },
       }),
-    [runtimeBaseUrl, accessToken, tenantId],
+    [runtimeBaseUrl, accessToken, tenantId, workspaceOrgId],
   );
 
   const organizationsQuery = useQuery({
-    queryKey: ["organization-page", "organizations", tenantId],
+    queryKey: ["organization-page", "organizations", tenantId, workspaceOrgId],
     enabled: Boolean(accessToken),
     queryFn: async () => normalizeList<StudioOrganization>(await studioApi.listOrganizations(client)),
   });
 
+  const usersOrgId = selectedOrgId || workspaceOrgId;
   const usersQuery = useQuery({
-    queryKey: ["organization-page", "users", tenantId],
+    queryKey: ["organization-page", "users", tenantId, workspaceOrgId, usersOrgId],
+    enabled: Boolean(accessToken && usersOrgId),
+    queryFn: async () => normalizeList<StudioUser>(await studioApi.listUsers(client, { orgId: usersOrgId })),
+  });
+
+  const meQuery = useQuery({
+    queryKey: ["organization-page", "me", tenantId, workspaceOrgId],
     enabled: Boolean(accessToken),
-    queryFn: async () => normalizeList<StudioUser>(await studioApi.listUsers(client)),
+    queryFn: async () => authApi.me(client),
+    retry: false,
   });
 
   const organizations = organizationsQuery.data ?? [];
-  const users = usersQuery.data ?? [];
+  const users = useMemo(() => {
+    const items = [...(usersQuery.data ?? [])];
+    const currentUser = normalizeCurrentUser(meQuery.data);
+    if (currentUser && !items.some((user) => user.id === currentUser.id || user.email === currentUser.email)) {
+      items.unshift(currentUser);
+    }
+    return items;
+  }, [meQuery.data, usersQuery.data]);
   const selectedOrgValue = organizations.some((organization) => organization.id === selectedOrgId)
     ? selectedOrgId
     : undefined;
   const selectedOrgLabel = organizations.find((organization) => organization.id === selectedOrgValue)?.name;
 
   useEffect(() => {
-    if (!organizations.length) return;
-    if (!selectedOrgId || !organizations.some((organization) => organization.id === selectedOrgId)) {
-      setSelectedOrgId(organizations[0].id);
+    if (workspaceOrgId) {
+      setSelectedOrgId(workspaceOrgId);
+      return;
     }
-  }, [organizations, selectedOrgId]);
+    setSelectedOrgId("");
+  }, [workspaceOrgId]);
 
   const policyQuery = useQuery({
     queryKey: ["organization-page", "settings", selectedOrgId],
@@ -451,14 +511,7 @@ export function Organization() {
             <CardContent className="space-y-4">
               <div className="max-w-sm">
                 <Label>Organization</Label>
-                <Select value={selectedOrgValue} onValueChange={setSelectedOrgId}>
-                  <SelectTrigger><span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span></SelectTrigger>
-                  <SelectContent>
-                    {organizations.map((organization) => (
-                      <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Input value={selectedOrgLabel ?? "No organization in current session"} disabled />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">
@@ -543,7 +596,7 @@ export function Organization() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1.5"><Label>Organization</Label><Select value={selectedOrgValue} onValueChange={setSelectedOrgId}><SelectTrigger><span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span></SelectTrigger><SelectContent>{organizations.map((organization) => (<SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>))}</SelectContent></Select></div>
+                <div className="space-y-1.5"><Label>Organization</Label><Input value={selectedOrgLabel ?? "No organization in current session"} disabled /></div>
                 <div className="space-y-1.5"><Label>Principal ID</Label><Input value={explainPrincipalId} onChange={(event) => setExplainPrincipalId(event.target.value)} placeholder="user or agent id" /></div>
                 <div className="space-y-1.5"><Label>Principal kind</Label><Select value={explainPrincipalKind} onValueChange={(value) => setExplainPrincipalKind(value as "user" | "agent")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="user">user</SelectItem><SelectItem value="agent">agent</SelectItem></SelectContent></Select></div>
                 <div className="space-y-1.5"><Label>Lens</Label><Input value={explainLens} onChange={(event) => setExplainLens(event.target.value)} placeholder="knowledge.resolve" /></div>

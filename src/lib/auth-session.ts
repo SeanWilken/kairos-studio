@@ -52,6 +52,16 @@ export function clearAuthSession(): void {
   window.dispatchEvent(new Event(AUTH_SESSION_EVENT));
 }
 
+export async function saveSessionDuringInitialization<T>(session: AuthSession, initialize: () => Promise<T>): Promise<T> {
+  saveAuthSession(session);
+  try {
+    return await initialize();
+  } catch (error) {
+    clearAuthSession();
+    throw error;
+  }
+}
+
 export function subscribeAuthSession(listener: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
     if (event.key === ACCESS_TOKEN_KEY || event.key === REFRESH_TOKEN_KEY) listener();

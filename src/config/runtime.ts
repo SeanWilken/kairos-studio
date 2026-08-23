@@ -26,18 +26,23 @@ export type RuntimeConfig = {
   orgId?: string;
 };
 
+function configured(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
 export function getRuntimeConfig(): RuntimeConfig {
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
   const runtime = typeof window !== "undefined" ? (window.__MYAI_CONFIG__ ?? {}) : {};
 
   return {
-    tenantId: runtime.tenantId ?? env.VITE_MYAI_TENANT_ID ?? "tenant-local",
-    coreApiBaseUrl: runtime.coreApiBaseUrl ?? env.VITE_MYAI_CORE_API_BASE_URL,
-    deApiBaseUrl: runtime.deApiBaseUrl ?? env.VITE_MYAI_DE_API_BASE_URL,
-    appId: runtime.appId ?? env.VITE_MYAI_APP_ID,
-    coreFrontendUrl: runtime.coreFrontendUrl ?? env.VITE_MYAI_CORE_FRONTEND_URL,
-    councilFrontendUrl: runtime.councilFrontendUrl ?? env.VITE_MYAI_COUNCIL_FRONTEND_URL,
-    coreWsUrl: runtime.coreWsUrl ?? env.VITE_MYAI_CORE_WS_URL,
-    orgId: runtime.orgId ?? env.VITE_MYAI_ORG_ID,
+    tenantId: configured(runtime.tenantId) ?? configured(env.VITE_MYAI_TENANT_ID) ?? "tenant-local",
+    coreApiBaseUrl: configured(runtime.coreApiBaseUrl) ?? configured(env.VITE_MYAI_CORE_API_BASE_URL),
+    deApiBaseUrl: configured(runtime.deApiBaseUrl) ?? configured(env.VITE_MYAI_DE_API_BASE_URL),
+    appId: configured(runtime.appId) ?? configured(env.VITE_MYAI_APP_ID),
+    coreFrontendUrl: configured(runtime.coreFrontendUrl) ?? configured(env.VITE_MYAI_CORE_FRONTEND_URL),
+    councilFrontendUrl: configured(runtime.councilFrontendUrl) ?? configured(env.VITE_MYAI_COUNCIL_FRONTEND_URL),
+    coreWsUrl: configured(runtime.coreWsUrl) ?? configured(env.VITE_MYAI_CORE_WS_URL),
+    orgId: configured(runtime.orgId) ?? configured(env.VITE_MYAI_ORG_ID),
   };
 }

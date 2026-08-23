@@ -179,10 +179,17 @@ export function createCoreApiClient(config?: {
 
     const envelope = payload && typeof payload === "object" ? (payload as Envelope<T>) : null;
 
+    const authRetryBlocked = [
+      "v1/auth/login",
+      "v1/auth/register",
+      "v1/auth/refresh",
+      "v1/auth/logout",
+    ].includes(normalizedPath);
+
     if (
       response.status === 401
       && !options?.skipAuthRetry
-      && !normalizedPath.startsWith("v1/auth/")
+      && !authRetryBlocked
     ) {
       const refreshedToken = await refreshAccessToken();
       if (refreshedToken) {

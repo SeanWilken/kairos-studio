@@ -46,6 +46,23 @@ export type AuthMeOrgOption = {
 export type AuthMeResponse = Record<string, unknown> & {
   tenant_id?: string;
   org_id?: string;
+  user?: Record<string, unknown> & {
+    id?: string;
+    user_id?: string;
+    email?: string;
+    first_name?: string;
+    last_name?: string;
+    org_id?: string | null;
+    role?: string;
+    is_global_admin?: boolean;
+  };
+  auth?: {
+    tenant_id?: string;
+    org_id?: string | null;
+    roles?: string[];
+    is_global_admin?: boolean;
+  };
+  memberships?: Array<Record<string, unknown>>;
   org_options?: AuthMeOrgOption[];
 };
 

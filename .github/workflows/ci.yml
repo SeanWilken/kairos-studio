@@ -24,13 +24,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run strict typecheck
-        run: bun run typecheck
+        run: bun --bun run typecheck
+
+      - name: Run focused tests
+        run: bun --bun run test
 
       - name: Run frontend build checks
-        run: bun run build
+        run: bun --bun run build
 
       - name: Build container image
-        run: docker build -t myaitech/studio:ci .
+        run: docker build -t myaitech/studio:0.1.0-rc.3 .
 
       - name: Enforce changelog update on PRs
         if: github.event_name == 'pull_request'

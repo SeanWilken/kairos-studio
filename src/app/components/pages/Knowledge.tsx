@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Clock3, FileUp, RefreshCw, Upload } from "lucide-react";
+import { AlertCircle, CheckCircle2, FileUp, Upload } from "lucide-react";
 import {
   Alert,
   AlertDescription,
@@ -30,15 +30,11 @@ import {
   TabsTrigger,
   Textarea,
 } from "@myai-tech/myui";
-import { createCoreApiClient, governanceApi, knowledgeApi, studioApi, type KnowledgeDocument, type StudioOrganization } from "../../../lib/api";
-import { getAccessToken } from "../../../lib/auth-session";
+import { createCoreApiClient, governanceApi, knowledgeApi, type KnowledgeDocument } from "../../../lib/api";
+import { getAccessToken, subscribeAuthSession } from "../../../lib/auth-session";
+import { readAuthorizedContext } from "../../../lib/auth-context";
+import { getWorkspaceScope, subscribeWorkspaceScope, type WorkspaceScope } from "../../../lib/workspace-scope";
 import { getRuntimeConfig } from "../../../config/runtime"
-
-
-function normalizeItems<T>(value: unknown): T[] {
-  if (Array.isArray((value as { items?: unknown })?.items)) return (value as { items: T[] }).items;
-  return Array.isArray(value) ? (value as T[]) : [];
-}
 
 type UploadQueueItem = {
   id: string;
@@ -52,68 +48,34 @@ const visibilityScopes = ["private", "user", "group", "team", "org", "tenant", "
 export function Knowledge() {
   const [tab, setTab] = useState("upload");
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedOrgId, setSelectedOrgId] = useState("");
   const [visibilityScope, setVisibilityScope] = useState<(typeof visibilityScopes)[number]>("org");
   const [title, setTitle] = useState("");
   const [summary, setSummary] = useState("");
   const [tags, setTags] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
-  const [noteTitle, setNoteTitle] = useState("");
-  const [noteContent, setNoteContent] = useState("");
   const [policyPrincipalId, setPolicyPrincipalId] = useState("");
   const [lastError, setLastError] = useState("");
   const runtimeConfig = getRuntimeConfig();
-  const tenantId = runtimeConfig.tenantId;
   const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
-  const accessToken = getAccessToken();
+  const [accessToken, setAccessToken] = useState(() => getAccessToken());
+  const authorizedContext = readAuthorizedContext(accessToken);
+  const tenantId = authorizedContext.tenantId ?? runtimeConfig.tenantId;
+  const [workspaceScope, setWorkspaceScope] = useState<WorkspaceScope>(() => getWorkspaceScope(tenantId));
+  const selectedOrgId = authorizedContext.orgId ?? "";
+
+  useEffect(() => subscribeAuthSession(() => setAccessToken(getAccessToken())), []);
+  useEffect(() => subscribeWorkspaceScope(setWorkspaceScope, tenantId), [tenantId]);
 
   const client = useMemo(
     () => createCoreApiClient({ baseUrl: runtimeBaseUrl, accessToken, scope: { tenantId, orgId: selectedOrgId || undefined } }),
     [runtimeBaseUrl, accessToken, tenantId, selectedOrgId],
   );
 
-  const organizationsQuery = useQuery({
-    queryKey: ["knowledge", "organizations", tenantId],
-    enabled: Boolean(accessToken),
-    queryFn: async () => normalizeItems<StudioOrganization>(await studioApi.listOrganizations(client)),
-  });
-
-  useEffect(() => {
-    const organizations = organizationsQuery.data ?? [];
-    if (!organizations.length) return;
-    if (!selectedOrgId || !organizations.some((organization) => organization.id === selectedOrgId)) {
-      setSelectedOrgId(organizations[0].id);
-    }
-  }, [organizationsQuery.data, selectedOrgId]);
-
   const documentsQuery = useQuery({
     queryKey: ["knowledge", "documents", selectedOrgId, searchTerm],
     enabled: Boolean(accessToken && selectedOrgId),
     queryFn: async () => knowledgeApi.listDocuments(client, selectedOrgId, { search: searchTerm || undefined }),
-  });
-
-  const createNoteMutation = useMutation({
-    mutationFn: async () => {
-      if (!selectedOrgId) throw new Error("Select an organization first.");
-      if (!noteTitle.trim() || !noteContent.trim()) throw new Error("Note title and content are required.");
-      return knowledgeApi.createNote(client, {
-        org_id: selectedOrgId,
-        title: noteTitle.trim(),
-        content: noteContent.trim(),
-        summary: summary.trim() || undefined,
-        tags_json: tags.trim() ? JSON.stringify(tags.split(",").map((item) => item.trim()).filter(Boolean)) : undefined,
-        visibility_json: JSON.stringify({ scope: visibilityScope }),
-      });
-    },
-    onSuccess: async () => {
-      setLastError("");
-      setNoteTitle("");
-      setNoteContent("");
-      setTab("documents");
-      await documentsQuery.refetch();
-    },
-    onError: (error) => setLastError(error instanceof Error ? error.message : "Create note failed."),
   });
 
   const uploadMutation = useMutation({
@@ -158,13 +120,6 @@ export function Knowledge() {
     onError: (error) => setLastError(error instanceof Error ? error.message : "Upload failed."),
   });
 
-  const reprocessMutation = useMutation({
-    mutationFn: async (documentId: string) => knowledgeApi.reprocessDocument(client, documentId),
-    onSuccess: async () => {
-      await documentsQuery.refetch();
-    },
-  });
-
   const policyDecisionMutation = useMutation({
     mutationFn: async () => {
       if (!selectedOrgId || !policyPrincipalId.trim()) throw new Error("Org and principal are required.");
@@ -193,11 +148,14 @@ export function Knowledge() {
   });
 
   const documents = documentsQuery.data?.items ?? [];
-  const organizationOptions = organizationsQuery.data ?? [];
-  const selectedOrgValue = organizationOptions.some((organization) => organization.id === selectedOrgId)
-    ? selectedOrgId
-    : undefined;
-  const selectedOrgLabel = organizationOptions.find((organization) => organization.id === selectedOrgValue)?.name;
+  const workspaceOrgMatchesToken = workspaceScope.type === "organization"
+    ? workspaceScope.id === selectedOrgId
+    : workspaceScope.type === "team"
+      ? workspaceScope.orgId === selectedOrgId
+      : !selectedOrgId;
+  const selectedOrgLabel = workspaceOrgMatchesToken && workspaceScope.type !== "tenant"
+    ? workspaceScope.name
+    : selectedOrgId;
 
   const onFilesChosen = (fileList: FileList | null) => {
     if (!fileList) return;
@@ -223,7 +181,7 @@ export function Knowledge() {
     <div className="mx-auto w-full max-w-7xl p-8">
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-zinc-900">Knowledge Governance</h1>
-        <p className="mt-1 text-zinc-600">Distinct file uploads and notes with a clear processing lifecycle.</p>
+        <p className="mt-1 text-zinc-600">Upload and inspect documents in the organization authorized by your current session.</p>
       </div>
 
       <Card className="mb-6">
@@ -232,17 +190,8 @@ export function Knowledge() {
         </CardHeader>
         <CardContent className="grid gap-3 pb-6 md:grid-cols-2">
           <div className="space-y-1.5">
-            <Label>Organization</Label>
-            <Select value={selectedOrgValue} onValueChange={setSelectedOrgId}>
-              <SelectTrigger>
-                <span className="truncate text-left text-sm">{selectedOrgLabel ?? "Select organization"}</span>
-              </SelectTrigger>
-              <SelectContent>
-                {organizationOptions.map((organization) => (
-                  <SelectItem key={organization.id} value={organization.id}>{organization.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Authorized organization</Label>
+            <Input value={selectedOrgLabel || "No organization in current token"} disabled />
           </div>
           <div className="space-y-1.5">
             <Label>Visibility scope</Label>
@@ -261,7 +210,6 @@ export function Knowledge() {
       <Tabs value={tab} onValueChange={setTab} className="space-y-6">
         <TabsList>
           <TabsTrigger value="upload">Upload Files</TabsTrigger>
-          <TabsTrigger value="note">Create Knowledge Note</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
         </TabsList>
 
@@ -313,27 +261,6 @@ export function Knowledge() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="note">
-          <Card>
-            <CardHeader><CardTitle className="text-base">Create Knowledge Note</CardTitle></CardHeader>
-            <CardContent className="space-y-3 pb-6">
-              <div className="space-y-1.5">
-                <Label>Title</Label>
-                <Input value={noteTitle} onChange={(event) => setNoteTitle(event.target.value)} placeholder="Release checklist notes" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Content</Label>
-                <Textarea value={noteContent} onChange={(event) => setNoteContent(event.target.value)} rows={8} placeholder="Write markdown or plain text note content..." />
-              </div>
-              <div className="flex justify-end">
-                <Button type="button" onClick={() => void createNoteMutation.mutate()} disabled={!selectedOrgId || createNoteMutation.isPending}>
-                  Create note
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
         <TabsContent value="documents">
           <Card>
             <CardHeader><CardTitle className="text-base">Documents</CardTitle></CardHeader>
@@ -348,7 +275,6 @@ export function Knowledge() {
                     <TableHead>Size</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Modified</TableHead>
-                    <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -360,23 +286,12 @@ export function Knowledge() {
                       <TableCell>{typeof document.size_bytes === "number" ? `${document.size_bytes} B` : "-"}</TableCell>
                       <TableCell>{statusBadge(document)}</TableCell>
                       <TableCell>{document.updated_at ? new Date(document.updated_at).toLocaleString() : document.created_at ? new Date(document.created_at).toLocaleString() : "-"}</TableCell>
-                      <TableCell>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={reprocessMutation.isPending}
-                          onClick={() => void reprocessMutation.mutate(document.id)}
-                        >
-                          <RefreshCw className="mr-1 h-3.5 w-3.5" />Reprocess
-                        </Button>
-                      </TableCell>
                     </TableRow>
                   ))}
                   {!documents.length ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-sm text-zinc-500">
-                        {documentsQuery.isLoading ? "Loading documents..." : "No documents found for this organization."}
+                      <TableCell colSpan={6} className="text-sm text-zinc-500">
+                        {documentsQuery.isLoading ? "Loading documents..." : "No documents found for the authorized organization."}
                       </TableCell>
                     </TableRow>
                   ) : null}
@@ -404,15 +319,15 @@ export function Knowledge() {
         </CardContent>
       </Card>
 
-      {lastError || organizationsQuery.isError || documentsQuery.isError ? (
+      {lastError || documentsQuery.isError || !selectedOrgId ? (
         <Alert className="mt-6 border-red-200 bg-red-50">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Knowledge request failed</AlertTitle>
-          <AlertDescription>{lastError || "Unable to load knowledge data."}</AlertDescription>
+          <AlertDescription>{lastError || (!selectedOrgId ? "Your current token has no organization context. Switch organization from the workspace menu before using Knowledge." : "Unable to load knowledge data.")}</AlertDescription>
         </Alert>
       ) : null}
 
-      {uploadMutation.isSuccess || createNoteMutation.isSuccess ? (
+      {uploadMutation.isSuccess ? (
         <Alert className="mt-4 border-emerald-200 bg-emerald-50">
           <CheckCircle2 className="h-4 w-4" />
           <AlertTitle>Saved</AlertTitle>
@@ -420,13 +335,6 @@ export function Knowledge() {
         </Alert>
       ) : null}
 
-      {reprocessMutation.isPending ? (
-        <Alert className="mt-4 border-amber-200 bg-amber-50">
-          <Clock3 className="h-4 w-4" />
-          <AlertTitle>Reprocess in progress</AlertTitle>
-          <AlertDescription>Refreshing document processing status...</AlertDescription>
-        </Alert>
-      ) : null}
     </div>
   );
 }

@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from "react-router";
 import { motion } from "motion/react";
 import { Sparkles } from "lucide-react";
 import { authApi, createCoreApiClient } from "../../../lib/api";
-import { saveAuthSession } from "../../../lib/auth-session";
+import { saveAuthSession, saveSessionDuringInitialization } from "../../../lib/auth-session";
+import { readAuthorizedContext } from "../../../lib/auth-context";
 import { setWorkspaceScope } from "../../../lib/workspace-scope";
 import { getRuntimeConfig } from "../../../config/runtime"
 
@@ -27,7 +28,7 @@ export function LoginPage() {
     setError("");
 
     try {
-      const client = createCoreApiClient({ scope: { tenantId, orgId: orgId || undefined } });
+      const client = createCoreApiClient({ baseUrl: runtimeBaseUrl, scope: { tenantId, orgId: orgId || undefined } });
       const loginResult = await authApi.login(client, {
         email,
         password,
@@ -40,11 +41,11 @@ export function LoginPage() {
         throw new Error("Login succeeded but token payload was missing.");
       }
 
-      saveAuthSession({
+      await saveSessionDuringInitialization({
         accessToken: tokenSet.access_token,
         refreshToken: tokenSet.refresh_token,
         accessTokenExpiresAt: typeof tokenSet.expires_in === "number" ? Date.now() + tokenSet.expires_in * 1000 : undefined,
-      });
+      }, async () => {
 
       const meClient = createCoreApiClient({
         baseUrl: runtimeBaseUrl,
@@ -53,17 +54,40 @@ export function LoginPage() {
       });
       const me = await authApi.me(meClient);
       const orgOptions = Array.isArray(me.org_options) ? me.org_options : [];
-      const selectedOrg = orgOptions.find((option) => typeof option.org_id === "string") as { org_id?: string; name?: string } | undefined;
+        const authContext = me.auth && typeof me.auth === "object" ? (me.auth as { org_id?: unknown }) : null;
+        const currentOrgId = typeof me.org_id === "string"
+        ? me.org_id
+        : typeof authContext?.org_id === "string"
+            ? authContext.org_id
+            : "";
+        const selectedOrg = (orgOptions.find((option) => option.org_id === currentOrgId)
+          ?? orgOptions.find((option) => typeof option.org_id === "string")) as { org_id?: string; name?: string } | undefined;
 
       if (selectedOrg?.org_id) {
+        if (currentOrgId !== selectedOrg.org_id) {
+          const switched = await authApi.switchContext(meClient, { org_id: selectedOrg.org_id });
+          if (typeof switched.access_token !== "string" || typeof switched.refresh_token !== "string") {
+            throw new Error("Organization context switch succeeded but token payload was missing.");
+          }
+          if (readAuthorizedContext(switched.access_token).orgId !== selectedOrg.org_id) {
+            throw new Error("Organization context switch returned a token for a different organization.");
+          }
+          saveAuthSession({
+            accessToken: switched.access_token,
+            refreshToken: switched.refresh_token,
+            accessTokenExpiresAt: typeof switched.expires_in === "number" ? Date.now() + switched.expires_in * 1000 : undefined,
+          });
+        }
         setWorkspaceScope({ type: "organization", id: selectedOrg.org_id, name: selectedOrg.name ?? selectedOrg.org_id });
       } else {
         setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
       }
+      });
 
       setIsLoading(false);
       navigate("/");
     } catch (submitError) {
+      setWorkspaceScope({ type: "tenant", id: tenantId, name: tenantId });
       setIsLoading(false);
       setError(submitError instanceof Error ? submitError.message : "Login failed.");
     }

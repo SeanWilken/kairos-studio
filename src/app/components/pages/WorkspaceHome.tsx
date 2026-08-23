@@ -17,7 +17,7 @@ import {
   Radio,
 } from "lucide-react";
 import { Button, Progress } from "@myai-tech/myui";
-import { bootstrapApi, createCoreApiClient, healthApi, studioApi, systemApi } from "../../../lib/api";
+import { authApi, bootstrapApi, createCoreApiClient, healthApi, studioApi, systemApi } from "../../../lib/api";
 import { getAccessToken } from "../../../lib/auth-session";
 import { getCreateQueueState, subscribeCreateQueue } from "../../../lib/create-request-queue";
 import { buildWorkspaceNotifications, type WorkspaceHealthLevel } from "../../../lib/workspace-notifications";
@@ -37,12 +37,11 @@ type SetupStep = {
   timestamp?: string;
 };
 
-const CORE_FRONTEND_URL = (import.meta.env.VITE_MYAI_CORE_FRONTEND_URL as string | undefined) ?? "";
-const COUNCIL_FRONTEND_URL = (import.meta.env.VITE_MYAI_COUNCIL_FRONTEND_URL as string | undefined) ?? "";
-
 const runtimeConfig = getRuntimeConfig();
 const tenantId = runtimeConfig.tenantId;
 const runtimeBaseUrl = runtimeConfig.coreApiBaseUrl;
+const CORE_FRONTEND_URL = runtimeConfig.coreFrontendUrl ?? "";
+const COUNCIL_FRONTEND_URL = runtimeConfig.councilFrontendUrl ?? "";
 const EXPLICIT_WS_URL = runtimeConfig.coreWsUrl ?? "";
 
 function normalizeList<T>(value: unknown): T[] {
@@ -155,12 +154,13 @@ export function WorkspaceHome() {
         scope: { tenantId, orgId: scopeOrgId },
       });
 
-      const [health, tenantStatus, latestSession, organizationsResponse, usersResponse, coreFrontendStatus, councilFrontendStatus, webSocketStatus] = await Promise.all([
+      const [health, tenantStatus, latestSession, organizationsResponse, usersResponse, currentUser, coreFrontendStatus, councilFrontendStatus, webSocketStatus] = await Promise.all([
         healthApi.getHealth(publicClient),
         bootstrapApi.getTenantStatus(publicClient),
         bootstrapApi.listSessions(publicClient, { latest: true }),
         accessToken ? studioApi.listOrganizations(scopedClient) : Promise.resolve({ items: [] }),
         accessToken ? studioApi.listUsers(scopedClient, { orgId: scopeOrgId }) : Promise.resolve({ items: [] }),
+        accessToken ? authApi.me(scopedClient).catch(() => null) : Promise.resolve(null),
         probeFrontend(CORE_FRONTEND_URL),
         probeFrontend(COUNCIL_FRONTEND_URL),
         probeWebSocket(publicClient.baseUrl, accessToken),
@@ -168,6 +168,9 @@ export function WorkspaceHome() {
 
       const organizations = normalizeList<{ id: string; name: string; created_at?: string }>(organizationsResponse);
       const users = normalizeList<{ id: string; created_at?: string }>(usersResponse);
+      const currentUserOrganizations = Array.isArray(currentUser?.org_options) ? currentUser.org_options : [];
+      const organizationsCount = Math.max(organizations.length, currentUserOrganizations.length);
+      const usersCount = Math.max(users.length, currentUser ? 1 : 0);
 
       let sessionId = "";
       if (Array.isArray(latestSession) && latestSession.length > 0) {
@@ -271,20 +274,15 @@ export function WorkspaceHome() {
         },
         {
           id: "user",
-          label: "At least one user exists",
-          completed: users.length > 0,
-          timestamp: users[0]?.created_at,
+          label: "Administrator account configured",
+          completed: Boolean(tenantStatus.configured && currentUser),
+          timestamp: users[0]?.created_at ?? (typeof currentUser?.created_at === "string" ? currentUser.created_at : undefined),
         },
         {
           id: "organization",
-          label: "At least one organization exists",
-          completed: organizations.length > 0,
+          label: "Root organization available",
+          completed: organizationsCount > 0,
           timestamp: organizations[0]?.created_at,
-        },
-        {
-          id: "realtime",
-          label: "Realtime connectivity available",
-          completed: webSocketStatus === "healthy",
         },
       ];
 
@@ -293,8 +291,8 @@ export function WorkspaceHome() {
         healthItems,
         queueFailedCount: queueState.jobs.filter((job) => job.status === "failed").length,
         setupIncompleteCount,
-        organizationsCount: organizations.length,
-        usersCount: users.length,
+        organizationsCount,
+        usersCount,
       });
 
       return {
@@ -302,8 +300,8 @@ export function WorkspaceHome() {
         healthItems,
         setupSteps,
         notifications,
-        organizationsCount: organizations.length,
-        usersCount: users.length,
+        organizationsCount,
+        usersCount,
         queueFailedCount: queueState.jobs.filter((job) => job.status === "failed").length,
       };
     },

@@ -10,5 +10,6 @@ export * from "./reviews";
 export * from "./realtime";
 export * from "./governance";
 export * from "./knowledge";
+export * from "./tools";
 export * from "./ws-client";
 export * from "./audit";

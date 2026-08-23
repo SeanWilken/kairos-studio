@@ -16,6 +16,7 @@ import { CreateOrganizationPage, CreateTeamPage, CreateUserPage } from "./app/co
 import { CreatePersonaStudioPage } from "./app/components/pages/create/CreatePersonaStudioPage";
 import { CreatePersonaStudioABPage } from "./app/components/pages/create/CreatePersonaStudioABPage";
 import { CreateIndexPage } from "./app/components/pages/create/CreateIndexPage";
+import { requireAuth } from "./lib/route-auth";
 
 export const router = createBrowserRouter([
   {
@@ -25,6 +26,7 @@ export const router = createBrowserRouter([
   {
     path: "/",
     Component: KairosShell,
+    loader: requireAuth,
     children: [
       { index: true, Component: FirstRunLanding },
       { path: "overview", Component: WorkspaceHome },

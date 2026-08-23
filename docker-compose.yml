@@ -1,6 +1,6 @@
 services:
   myai-studio:
-    image: ${MYAI_STUDIO_IMAGE:-docker.io/myaitech/studio:local}
+    image: ${MYAI_STUDIO_IMAGE:-myaitech/studio:0.1.0-rc.3}
     build:
       context: .
       dockerfile: Dockerfile

@@ -2,6 +2,8 @@
 
 This project was generated with Figma Make and is intended as a local React/Vite frontend workspace.
 
+Current pre-release: `0.1.0-rc.3`. The canonical container image is `myaitech/studio:0.1.0-rc.3`.
+
 ## Attribution and licenses
 
 This Figma Make file includes components from [shadcn/ui](https://ui.shadcn.com/) used under the [MIT license](https://github.com/shadcn-ui/ui/blob/main/LICENSE.md).
@@ -22,6 +24,8 @@ You can extract shared components into an internal package later once patterns s
 ## Scripts
 
 - `bun run build` - builds the app with Vite.
+- `bun run typecheck` - runs strict TypeScript project checks.
+- `bun run test` - runs focused contract tests with Bun.
 - `bun run check:frontend` - validates frontend build for local/CI checks.
 - `bun run check:changelog` - validates that non-doc changes include `CHANGELOG.md` updates.
 
@@ -64,3 +68,7 @@ Persona create persistence uses `POST /v1/studio/personas` with normalized `data
   - `pre-commit` runs frontend build checks and changelog enforcement.
   - `commit-msg` enforces conventional commits via commitlint.
 - GitHub Actions CI runs frontend build checks on push/PR and enforces changelog updates for pull requests.
+
+## Pre-alpha security debt
+
+Studio currently persists access and refresh tokens in `localStorage`. This remains documented pre-alpha debt and must be replaced with a hardened session architecture before a production release.

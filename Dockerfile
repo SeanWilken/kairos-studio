@@ -8,6 +8,8 @@ COPY . .
 RUN bun run build
 
 FROM nginx:1.27-alpine AS runtime
+LABEL org.opencontainers.image.title="myaitech/studio" \
+      org.opencontainers.image.version="0.1.0-rc.3"
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY docker/runtime-config.template.js /usr/share/nginx/html/runtime-config.template.js
