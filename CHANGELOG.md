@@ -6,6 +6,8 @@ The format is based on Keep a Changelog.
 
 ## [Unreleased]
 
+- Added repository guidance and a cross-machine OpenCode session handoff.
+
 ## [0.1.0-rc.3] - 2026-08-23
 
 - Bound displayed workspace and Knowledge organization context to the authenticated JWT and added guarded shell routes.
